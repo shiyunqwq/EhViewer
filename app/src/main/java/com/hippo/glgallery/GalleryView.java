@@ -617,8 +617,10 @@ public final class GalleryView extends GLView implements GestureRecognizer.Liste
                 mListener.onTapMenuArea();
             }
         } else if (mLeftArea.contains((int) x, (int) y)) {
+            notifyTryNextGalleryIfMatch(false);
             mLayoutManager.onPageLeft();
         } else if (mRightArea.contains((int) x, (int) y)) {
+            notifyTryNextGalleryIfMatch(true);
             mLayoutManager.onPageRight();
         }
     }
