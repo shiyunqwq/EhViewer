@@ -1126,10 +1126,13 @@ class DownloadsScene :
                     if (mRecyclerView!!.isInCustomChoice) {
                         mRecyclerView!!.toggleItemChecked(index)
                     } else {
-                        if (index in 0 until mList!!.size) {
+                       if (index in 0 until mList!!.size) {
+                            val gidList = mList!!.map { it.gid }.toLongArray()
                             val intent = Intent(mainActivity!!, GalleryActivity::class.java)
                             intent.action = GalleryActivity.ACTION_EH
                             intent.putExtra(GalleryActivity.KEY_GALLERY_INFO, mList!![index])
+                            intent.putExtra(GalleryActivity.KEY_FROM_DOWNLOAD, true)
+                            intent.putExtra(GalleryActivity.KEY_DOWNLOAD_GID_LIST, gidList)
                             startActivity(intent)
                         }
                     }
