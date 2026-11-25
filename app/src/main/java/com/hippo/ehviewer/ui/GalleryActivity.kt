@@ -97,6 +97,7 @@ import com.hippo.ehviewer.client.data.GalleryInfo
 import com.hippo.ehviewer.client.data.GalleryPreview
 import com.hippo.ehviewer.coil.loadReaderPreviewCache
 import com.hippo.ehviewer.coil.saveReaderPreviewCache
+import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.gallery.ArchiveGalleryProvider
 import com.hippo.ehviewer.gallery.EhGalleryProvider
 import com.hippo.ehviewer.gallery.GalleryProvider2
@@ -214,6 +215,9 @@ class GalleryActivity :
     private var mUri: Uri? = null
     private var mGalleryInfo: GalleryInfo? = null
     private var mPage = 0
+    private var mFromDownload = false
+    private var mDownloadGidList: LongArray? = null
+    private var mLastJumpTime = 0L
     private var mCacheFileName: String? = null
     private var mGLRootView: GLRootView? = null
     private var mGalleryView: GalleryView? = null
@@ -363,8 +367,9 @@ class GalleryActivity :
         mGalleryInfo = intent.getParcelableExtraCompat(KEY_GALLERY_INFO)
         mInitialReaderPreviews = intent.getGalleryPreviewArrayListExtra(KEY_INITIAL_READER_PREVIEWS)
         mPage = intent.getIntExtra(KEY_PAGE, -1)
+        mFromDownload = intent.getBooleanExtra(KEY_FROM_DOWNLOAD, false)
+        mDownloadGidList = intent.getLongArrayExtra(KEY_DOWNLOAD_GID_LIST)
     }
-
     private fun onInit() {
         handleIntent(intent)
         buildProvider()
@@ -395,6 +400,8 @@ class GalleryActivity :
         mInitialReaderPreviews = savedInstanceState.getGalleryPreviewArrayList(KEY_INITIAL_READER_PREVIEWS)
         mPage = savedInstanceState.getInt(KEY_PAGE, -1)
         mCurrentIndex = savedInstanceState.getInt(KEY_CURRENT_INDEX)
+        mFromDownload = savedInstanceState.getBoolean(KEY_FROM_DOWNLOAD, false)
+        mDownloadGidList = savedInstanceState.getLongArray(KEY_DOWNLOAD_GID_LIST)
         buildProvider()
     }
 
@@ -413,6 +420,8 @@ class GalleryActivity :
         }
         outState.putInt(KEY_PAGE, mPage)
         outState.putInt(KEY_CURRENT_INDEX, mCurrentIndex)
+        outState.putBoolean(KEY_FROM_DOWNLOAD, mFromDownload)
+        outState.putLongArray(KEY_DOWNLOAD_GID_LIST, mDownloadGidList)
     }
 
     override fun attachBaseContext(newBase: Context) {
@@ -1666,9 +1675,15 @@ class GalleryActivity :
         SimpleHandler.getInstance().post(task)
     }
 
-    override fun onLongPressPage(index: Int) {
+   override fun onLongPressPage(index: Int) {
         val task = mNotifyTaskPool.pop() ?: NotifyTask()
         task.setData(NOTIFY_KEY_LONG_PRESS_PAGE, index)
+        SimpleHandler.getInstance().post(task)
+    }
+
+    override fun onTryNextGallery() {
+        val task = mNotifyTaskPool.pop() ?: NotifyTask()
+        task.setData(NOTIFY_KEY_TRY_NEXT_GALLERY, 0)
         SimpleHandler.getInstance().post(task)
     }
 
@@ -2279,9 +2294,50 @@ class GalleryActivity :
                 NOTIFY_KEY_TAP_ERROR_TEXT -> onTapErrorText(mValue)
 
                 NOTIFY_KEY_LONG_PRESS_PAGE -> onLongPressPage(mValue)
+
+                NOTIFY_KEY_TRY_NEXT_GALLERY -> tryOpenNextGallery()
             }
             mNotifyTaskPool.push(this)
         }
+    }
+
+    private fun tryOpenNextGallery() {
+        if (!mFromDownload || mSize <= 0) return
+        val alignedIndex = mGalleryView?.getPagePairStart(mCurrentIndex) ?: mCurrentIndex
+        val pairSize = getStablePagePairSize(alignedIndex).coerceAtLeast(1)
+        if (alignedIndex + pairSize < mSize) return
+
+        val currentGid = mGalleryInfo?.gid ?: return
+        val gidList = mDownloadGidList ?: return
+
+        val now = System.currentTimeMillis()
+        if (now - mLastJumpTime < 500L) return
+        mLastJumpTime = now
+
+        val currentIndex = gidList.indexOf(currentGid)
+        if (currentIndex == -1 || currentIndex + 1 >= gidList.size) {
+            Toast.makeText(this, "已经是最后一本画廊了", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val nextGid = gidList[currentIndex + 1]
+        val nextInfo = DownloadManager.getDownloadInfo(nextGid)
+        if (nextInfo == null) {
+            Toast.makeText(this, "未找到下一本画廊", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        stopAutoTransfer()
+        mSize = 0
+        val nextIntent = Intent(this, GalleryActivity::class.java).apply {
+            action = ACTION_EH
+            putExtra(KEY_GALLERY_INFO, nextInfo)
+            putExtra(KEY_PAGE, 0)
+            putExtra(KEY_FROM_DOWNLOAD, true)
+            putExtra(KEY_DOWNLOAD_GID_LIST, gidList)
+        }
+        intent = nextIntent
+        onNewIntent(nextIntent)
     }
 
     private fun getReaderSidebarToggleRestAlpha(): Float = if (Settings.layoutReaderThumbnailSidebarToggleAutoHide) {
@@ -2312,6 +2368,8 @@ class GalleryActivity :
         const val KEY_INITIAL_READER_PREVIEWS = "initial_reader_previews"
         const val KEY_PAGE = "page"
         const val KEY_CURRENT_INDEX = "current_index"
+        const val KEY_FROM_DOWNLOAD = "from_download"
+        const val KEY_DOWNLOAD_GID_LIST = "download_gid_list"
         private const val READER_SIDEBAR_TOGGLE_HINT_DELAY: Long = 1500
         private const val READER_SIDEBAR_TOGGLE_VISIBLE_ALPHA = 0.82f
         private const val READER_SIDEBAR_TOGGLE_REST_ALPHA = 0.28f
@@ -2323,6 +2381,7 @@ class GalleryActivity :
         private const val NOTIFY_KEY_TAP_MENU_AREA = 4
         private const val NOTIFY_KEY_TAP_ERROR_TEXT = 5
         private const val NOTIFY_KEY_LONG_PRESS_PAGE = 6
+        private const val NOTIFY_KEY_TRY_NEXT_GALLERY = 7
         private val READER_SIDEBAR_WIDTH_RATIOS = FloatArray(33) { (3 + it) / 100f }
         private const val READER_SIDEBAR_MIN_WIDTH_DP = 56
     }
