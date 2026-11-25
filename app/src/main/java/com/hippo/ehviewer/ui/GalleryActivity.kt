@@ -2386,3 +2386,4 @@ class GalleryActivity :
         private const val READER_SIDEBAR_MIN_WIDTH_DP = 56
     }
 }
+ 
