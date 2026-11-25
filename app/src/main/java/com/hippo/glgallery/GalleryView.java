@@ -669,6 +669,13 @@ public final class GalleryView extends GLView implements GestureRecognizer.Liste
     }
 
     private void onFlingInternal(float velocityX, float velocityY) {
+        if (Math.abs(velocityX) > Math.abs(velocityY)) {
+            if (mLayoutMode == LAYOUT_LEFT_TO_RIGHT && velocityX < -800) {
+                notifyTryNextGalleryIfMatch(true);
+            } else if (mLayoutMode == LAYOUT_RIGHT_TO_LEFT && velocityX > 800) {
+                notifyTryNextGalleryIfMatch(false);
+            }
+        }
         if (mLayoutManager != null) {
             mLayoutManager.onFling(velocityX, velocityY);
         }
@@ -773,13 +780,25 @@ public final class GalleryView extends GLView implements GestureRecognizer.Liste
         }
     }
 
+    private void notifyTryNextGalleryIfMatch(boolean isRightAction) {
+        if (mListener == null) {
+            return;
+        }
+        boolean isNextAction = (mLayoutMode == LAYOUT_RIGHT_TO_LEFT) ? !isRightAction : isRightAction;
+        if (isNextAction) {
+            mListener.onTryNextGallery();
+        }
+    }
+
     private void pageLeftInternal() {
+        notifyTryNextGalleryIfMatch(false);
         if (mLayoutManager != null) {
             mLayoutManager.onPageLeft();
         }
     }
 
     private void pageRightInternal() {
+        notifyTryNextGalleryIfMatch(true);
         if (mLayoutManager != null) {
             mLayoutManager.onPageRight();
         }
@@ -1204,7 +1223,7 @@ public final class GalleryView extends GLView implements GestureRecognizer.Liste
     public @interface StartPosition {
     }
 
-    public interface Listener {
+   public interface Listener {
         void onUpdateCurrentIndex(int index);
 
         void onTapSliderArea();
@@ -1214,6 +1233,9 @@ public final class GalleryView extends GLView implements GestureRecognizer.Liste
         void onTapErrorText(int index);
 
         void onLongPressPage(int index);
+
+        default void onTryNextGallery() {
+        }
     }
 
     public static class Builder {
