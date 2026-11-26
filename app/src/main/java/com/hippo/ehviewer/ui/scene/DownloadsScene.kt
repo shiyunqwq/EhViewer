@@ -33,6 +33,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.PopupMenu
 import androidx.appcompat.widget.Toolbar
+import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
 import androidx.core.util.size
 import androidx.core.view.GravityCompat
@@ -305,6 +306,9 @@ class DownloadsScene :
         mFabLayout!!.setHidePrimaryFab(true)
         mFabLayout!!.setAutoCancel(false)
         mFabLayout!!.setOnClickFabListener(this)
+        mFabLayout!!.getSecondaryFabAt(1)?.let {
+            TooltipCompat.setTooltipText(it, getString(R.string.download_check_above))
+        }
         addAboveSnackView(mFabLayout!!)
         updateView()
         return view
@@ -566,12 +570,27 @@ class DownloadsScene :
         }
         if (0 == position) {
             recyclerView.checkAll()
+        } else if (1 == position) {
+            var maxCheckedPosition = -1
+            recyclerView.checkedItemPositions?.let {
+                for (i in 0 until it.size) {
+                    if (it.valueAt(i)) {
+                        val pos = it.keyAt(i)
+                        if (pos > maxCheckedPosition) {
+                            maxCheckedPosition = pos
+                        }
+                    }
+                }
+            }
+            if (maxCheckedPosition >= 0) {
+                recyclerView.checkRange(0, maxCheckedPosition)
+            }
         } else {
             val list = mList ?: return
             var gidList: LongList? = null
             var downloadInfoList: MutableList<DownloadInfo>? = null
-            val collectGid = position == 2 || position == 3 || position == 4 // Start, Stop, Delete
-            val collectDownloadInfo = position == 1 || position == 4 || position == 5 // Pin, Delete, Move
+            val collectGid = position == 3 || position == 4 || position == 5 // Start, Stop, Delete
+            val collectDownloadInfo = position == 2 || position == 5 || position == 6 // Pin, Delete, Move
             if (collectGid) {
                 gidList = LongList()
             }
@@ -593,7 +612,7 @@ class DownloadsScene :
             }
             when (position) {
                 // Pin to top
-                1 -> {
+                2 -> {
                     val pinList = downloadInfoList!!.reversed()
                     val nowTimeStamp = System.currentTimeMillis()
                     for (i in pinList.indices) {
@@ -606,7 +625,7 @@ class DownloadsScene :
                 }
 
                 // Start
-                2 -> {
+                3 -> {
                     val intent = Intent(activity, DownloadService::class.java)
                     intent.action = DownloadService.ACTION_START_RANGE
                     intent.putExtra(DownloadService.KEY_GID_LIST, gidList)
@@ -616,7 +635,7 @@ class DownloadsScene :
                 }
 
                 // Stop
-                3 -> {
+                4 -> {
                     // DownloadManager Actions
                     DownloadManager.stopRangeDownload(gidList!!)
                     // Cancel check mode
@@ -624,7 +643,7 @@ class DownloadsScene :
                 }
 
                 // Delete
-                4 -> {
+                5 -> {
                     val builder = CheckBoxDialogBuilder(
                         context,
                         getString(R.string.download_remove_dialog_message_2, gidList!!.size),
@@ -642,7 +661,7 @@ class DownloadsScene :
                 }
 
                 // Move
-                5 -> {
+                6 -> {
                     val labelRawList = DownloadManager.labelList
                     val labelList: MutableList<String> = ArrayList(labelRawList.size + 1)
                     labelList.add(getString(R.string.default_download_label_name))
@@ -685,7 +704,12 @@ class DownloadsScene :
 
     @SuppressLint("NotifyDataSetChanged")
     override fun onReload() {
-        mAdapter?.notifyDataSetChanged()
+        if (mRecyclerView?.isInCustomChoice != true) {
+            updateForLabel()
+        } else {
+            mAdapter?.notifyDataSetChanged()
+        }
+        mLabelAdapter?.notifyDataSetChanged()
         updateView()
     }
 

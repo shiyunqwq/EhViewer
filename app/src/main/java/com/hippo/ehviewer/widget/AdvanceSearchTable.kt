@@ -46,6 +46,7 @@ class AdvanceSearchTable @JvmOverloads constructor(
     private var mSfl: CheckBox
     private var mSfu: CheckBox
     private var mSft: CheckBox
+    private var mExcludeDownloaded: CheckBox
 
     init {
         orientation = VERTICAL
@@ -65,6 +66,8 @@ class AdvanceSearchTable @JvmOverloads constructor(
         mSfl = row4.getChildAt(0) as CheckBox
         mSfu = row4.getChildAt(1) as CheckBox
         mSft = row4.getChildAt(2) as CheckBox
+        val row5 = getChildAt(5) as ViewGroup
+        mExcludeDownloaded = row5.getChildAt(0) as CheckBox
         mSpt.setOnEditorActionListener { v: TextView, _: Int, _: KeyEvent? ->
             val nextView = v.focusSearch(FOCUS_DOWN)
             nextView?.requestFocus(FOCUS_DOWN)
@@ -80,6 +83,7 @@ class AdvanceSearchTable @JvmOverloads constructor(
             if (mSfl.isChecked) advanceSearch = advanceSearch or SFL
             if (mSfu.isChecked) advanceSearch = advanceSearch or SFU
             if (mSft.isChecked) advanceSearch = advanceSearch or SFT
+            if (mExcludeDownloaded.isChecked) advanceSearch = advanceSearch or EXCLUDE_DOWNLOADED
             return advanceSearch
         }
         set(advanceSearch) {
@@ -88,6 +92,7 @@ class AdvanceSearchTable @JvmOverloads constructor(
             mSfl.isChecked = NumberUtils.int2boolean(advanceSearch and SFL)
             mSfu.isChecked = NumberUtils.int2boolean(advanceSearch and SFU)
             mSft.isChecked = NumberUtils.int2boolean(advanceSearch and SFT)
+            mExcludeDownloaded.isChecked = NumberUtils.int2boolean(advanceSearch and EXCLUDE_DOWNLOADED)
         }
 
     var minRating: Int
@@ -171,6 +176,7 @@ class AdvanceSearchTable @JvmOverloads constructor(
         const val SFL = 0x100
         const val SFU = 0x200
         const val SFT = 0x400
+        const val EXCLUDE_DOWNLOADED = 0x800
         private const val STATE_KEY_SUPER = "super"
         private const val STATE_KEY_ADVANCE_SEARCH = "advance_search"
         private const val STATE_KEY_MIN_RATING = "min_rating"

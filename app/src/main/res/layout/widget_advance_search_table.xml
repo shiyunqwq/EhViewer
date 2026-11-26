@@ -164,4 +164,18 @@
             android:minHeight="0dp"
             android:text="@string/search_sft" />
     </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/advance_search_table_item_margin">
+
+        <com.google.android.material.checkbox.MaterialCheckBox
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_vertical"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:text="@string/search_exclude_downloaded" />
+    </LinearLayout>
 </merge>

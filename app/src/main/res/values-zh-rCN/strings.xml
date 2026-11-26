@@ -170,6 +170,7 @@
     <string name="search_sfl">语言</string>
     <string name="search_sfu">上传者</string>
     <string name="search_sft">标签</string>
+    <string name="search_exclude_downloaded">排除已下载画廊</string>
     <string name="search_image">图片搜索</string>
     <string name="select_image">选择图片</string>
     <string name="select_image_first">请先选择图片</string>
@@ -536,6 +537,17 @@
     <string name="settings_download_clean_redundancy_summary">清理下载目录中不在下载列表里的图片文件</string>
     <string name="settings_download_clean_redundancy_no_redundancy">未发现冗余</string>
     <string name="settings_download_clean_redundancy_done">完成冗余清理，共清理 %d 项</string>
+    <string name="download_check_above">选中上方全部</string>
+    <string name="settings_download_check_update">检测已下载画廊更新</string>
+    <string name="settings_download_check_update_summary">自动检测所有已下载画廊是否有新版本并覆盖更新</string>
+    <string name="settings_download_check_update_confirm">确定检测所有已下载画廊的更新吗？发现新版本后将自动下载并覆盖原画廊。</string>
+    <string name="settings_download_check_update_running">正在检测更新中，请稍候</string>
+    <string name="settings_download_check_update_progress">正在检测更新 (%1$d/%2$d)，已发现 %3$d 个更新</string>
+    <string name="settings_download_check_update_empty">没有可检测的已下载画廊</string>
+    <string name="settings_download_check_update_cancelled">已取消检测，已加入 %d 个更新任务</string>
+    <string name="settings_download_check_update_found">检测完成，发现 %d 个画廊有更新，已开始覆盖更新</string>
+    <string name="settings_download_check_update_done_with_errors">检测完成，未发现更新（%d 个画廊检测失败）</string>
+    <string name="settings_download_check_update_none">检测完成，所有已下载画廊均已是最新版本</string>
     <string name="settings_privacy">隐私</string>
     <string name="settings_privacy_pattern_protection_title">图案保护</string>
     <string name="settings_privacy_pattern_protection_not_set">未设置图案保护</string>

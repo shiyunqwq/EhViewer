@@ -1378,6 +1378,17 @@ class GalleryListScene :
 
     private fun onGetGalleryListSuccess(result: GalleryListParser.Result, taskId: Int) {
         if (mHelper != null && mHelper!!.isCurrentTask(taskId)) {
+            if (mUrlBuilder.isExcludeDownloaded) {
+                result.galleryInfoList.removeAll { mDownloadManager.containDownloadInfo(it.gid) }
+                if (result.galleryInfoList.isEmpty() && !mIsTopList) {
+                    val nextIndex = if (mHelper!!.lastRequestIsNext) result.next else result.prev
+                    if (nextIndex != null && mHelper!!.canAutoSkipEmptyPage()) {
+                        mHelper!!.fetchPageForExcludeDownloadedSkip(taskId, nextIndex, mHelper!!.lastRequestIsNext)
+                        return
+                    }
+                }
+            }
+            mHelper!!.resetExcludeDownloadedSkipCount()
             val emptyString =
                 getString(if (mUrlBuilder.mode == MODE_SUBSCRIPTION && result.noWatchedTags) R.string.gallery_list_empty_hit_subscription else R.string.gallery_list_empty_hit)
             mHelper!!.setEmptyString(emptyString)
@@ -1648,6 +1659,31 @@ class GalleryListScene :
     }
 
     private inner class GalleryListHelper : GalleryInfoContentHelper() {
+        var lastRequestIsNext = true
+            private set
+        private var mExcludeDownloadedSkipCount = 0
+
+        fun canAutoSkipEmptyPage(): Boolean = mExcludeDownloadedSkipCount < MAX_EXCLUDE_DOWNLOADED_SKIP
+
+        fun resetExcludeDownloadedSkipCount() {
+            mExcludeDownloadedSkipCount = 0
+        }
+
+        fun fetchPageForExcludeDownloadedSkip(taskId: Int, index: String, isNext: Boolean) {
+            mExcludeDownloadedSkipCount++
+            lastRequestIsNext = isNext
+            mUrlBuilder.setIndex(index, isNext)
+            mUrlBuilder.setJumpTo(null)
+            val url = mUrlBuilder.build()
+            val request = EhRequest()
+            request.setMethod(EhClient.METHOD_GET_GALLERY_LIST)
+            request.setCallback(
+                GetGalleryListListener(context, taskId),
+            )
+            request.setArgs(url)
+            request.enqueue(this@GalleryListScene)
+        }
+
         override fun getPageData(
             taskId: Int,
             type: Int,
@@ -1659,6 +1695,8 @@ class GalleryListScene :
             if (null == activity || null == mHelper) {
                 return
             }
+            lastRequestIsNext = isNext
+            mExcludeDownloadedSkipCount = 0
             if (mIsTopList) {
                 mUrlBuilder.setJumpTo(page.toString())
             } else {
@@ -1754,6 +1792,7 @@ class GalleryListScene :
         private const val ANIMATE_TIME = 300L
         private const val RANDOM_GALLERY_MAX_TRY = 20
         private const val RANDOM_GALLERY_MIN_GID_UPPER_BOUND = 1_000_000L
+        private const val MAX_EXCLUDE_DOWNLOADED_SKIP = 10
 
         private fun getSuitableTitleForUrlBuilder(
             resources: Resources,

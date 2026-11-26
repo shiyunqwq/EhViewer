@@ -82,6 +82,9 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
     private var mDownloadReference = 0
     private val mImageUrls = hashMapOf<Long, String>()
 
+    @Volatile
+    var completedUpgradeFrom: Long? = null
+
     fun addOnSpiderListener(listener: OnSpiderListener) {
         synchronized(mSpiderListeners) { mSpiderListeners.add(listener) }
     }
@@ -143,16 +146,21 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
     }
 
     private fun notifyAllPageDownloaded() {
+        val finished = mFinishedPages.get()
+        val total = mPageStateArray.size
+        if (finished == total) {
+            completedUpgradeFrom = mSpiderInfo.upgradeFrom
+            mSpiderInfo.upgradeFrom = null
+        }
         synchronized(mSpiderListeners) {
             mSpiderListeners.forEach {
                 it.onFinish(
-                    mFinishedPages.get(),
+                    finished,
                     mDownloadedPages.get(),
-                    mPageStateArray.size,
+                    total,
                 )
             }
         }
-        mSpiderInfo.upgradeFrom = null
     }
 
     fun notifyGetImageSuccess(index: Int, image: Image) {

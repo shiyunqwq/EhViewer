@@ -195,7 +195,27 @@ open class EasyRecyclerView @JvmOverloads constructor(
      * Sets all items checked.
      */
     fun checkAll() {
+        val count = mAdapter?.itemCount ?: return
+        if (count > 0) {
+            checkRange(0, count - 1)
+        }
+    }
+
+    /**
+     * Sets items in [start, endInclusive] checked.
+     */
+    fun checkRange(start: Int, endInclusive: Int) {
         if (mChoiceMode == CHOICE_MODE_NONE || mChoiceMode == CHOICE_MODE_SINGLE) {
+            return
+        }
+        val adapter = mAdapter ?: return
+        val count = adapter.itemCount
+        if (count <= 0) {
+            return
+        }
+        val from = start.coerceAtLeast(0)
+        val to = endInclusive.coerceAtMost(count - 1)
+        if (from > to) {
             return
         }
 
@@ -216,17 +236,17 @@ open class EasyRecyclerView @JvmOverloads constructor(
             }
             mChoiceActionMode = startActionMode(mMultiChoiceModeCallback)
         }
-        for (i in 0 until mAdapter!!.itemCount) {
+        for (i in from..to) {
             val oldValue = mCheckStates!![i]
             mCheckStates!!.put(i, true)
-            if (mCheckedIdStates != null && mAdapter!!.hasStableIds()) {
-                mCheckedIdStates!!.put(mAdapter!!.getItemId(i), i)
+            if (mCheckedIdStates != null && adapter.hasStableIds()) {
+                mCheckedIdStates!!.put(adapter.getItemId(i), i)
             }
             if (!oldValue) {
                 checkedItemCount++
             }
             if (mChoiceActionMode != null) {
-                val id = mAdapter!!.getItemId(i)
+                val id = adapter.getItemId(i)
                 mMultiChoiceModeCallback!!.onItemCheckedStateChanged(
                     mChoiceActionMode!!,
                     i,
@@ -235,7 +255,7 @@ open class EasyRecyclerView @JvmOverloads constructor(
                 )
             }
             if (mChoiceMode == CHOICE_MODE_MULTIPLE_CUSTOM) {
-                val id = mAdapter!!.getItemId(i)
+                val id = adapter.getItemId(i)
                 mCustomChoiceListener!!.onItemCheckedStateChanged(this, i, id, true)
             }
         }

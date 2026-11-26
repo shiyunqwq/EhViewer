@@ -20,7 +20,6 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Dialog
 import android.app.DownloadManager
-import android.app.ForegroundServiceStartNotAllowedException
 import android.app.assist.AssistContent
 import android.content.ActivityNotFoundException
 import android.content.Context
@@ -73,7 +72,6 @@ import com.hippo.ehviewer.AnimationConstants
 import com.hippo.ehviewer.EhApplication
 import com.hippo.ehviewer.EhApplication.Companion.galleryDetailCache
 import com.hippo.ehviewer.EhApplication.Companion.imageCache
-import com.hippo.ehviewer.EhApplication.Companion.okHttpClient
 import com.hippo.ehviewer.EhApplication.Companion.thumbCache
 import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.R
@@ -83,7 +81,6 @@ import com.hippo.ehviewer.client.EhClient
 import com.hippo.ehviewer.client.EhCookieStore
 import com.hippo.ehviewer.client.EhFilter
 import com.hippo.ehviewer.client.EhRequest
-import com.hippo.ehviewer.client.EhRequestBuilder
 import com.hippo.ehviewer.client.EhTagDatabase
 import com.hippo.ehviewer.client.EhTagDatabase.isTranslatable
 import com.hippo.ehviewer.client.EhTagDatabase.namespaceToPrefix
@@ -101,7 +98,6 @@ import com.hippo.ehviewer.client.exception.EhException
 import com.hippo.ehviewer.client.getImageKey
 import com.hippo.ehviewer.client.getThumbKey
 import com.hippo.ehviewer.client.parser.ArchiveParser
-import com.hippo.ehviewer.client.parser.GalleryDetailParser
 import com.hippo.ehviewer.client.parser.HomeParser
 import com.hippo.ehviewer.client.parser.RateGalleryParser
 import com.hippo.ehviewer.client.parser.TorrentParser
@@ -109,14 +105,10 @@ import com.hippo.ehviewer.client.thumbUrl
 import com.hippo.ehviewer.dao.DownloadInfo
 import com.hippo.ehviewer.dao.Filter
 import com.hippo.ehviewer.download.DownloadManager.DownloadInfoListener
-import com.hippo.ehviewer.download.DownloadService
+import com.hippo.ehviewer.download.GalleryUpgradeHelper
 import com.hippo.ehviewer.spider.SpiderDen
-import com.hippo.ehviewer.spider.SpiderInfo
 import com.hippo.ehviewer.spider.SpiderQueen
-import com.hippo.ehviewer.spider.SpiderQueen.Companion.GET_FULL_HASH
 import com.hippo.ehviewer.spider.SpiderQueen.Companion.MODE_READ
-import com.hippo.ehviewer.spider.SpiderQueen.Companion.SPIDER_INFO_FILENAME
-import com.hippo.ehviewer.spider.saveToUniFile
 import com.hippo.ehviewer.ui.CommonOperations
 import com.hippo.ehviewer.ui.GalleryActivity
 import com.hippo.ehviewer.util.WindowSizeUtils
@@ -130,7 +122,6 @@ import com.hippo.util.ReadableTime
 import com.hippo.util.addTextToClipboard
 import com.hippo.util.getParcelableCompat
 import com.hippo.util.isAtLeastQ
-import com.hippo.util.isAtLeastS
 import com.hippo.util.launchIO
 import com.hippo.util.loadHtml
 import com.hippo.util.withUIContext
@@ -147,7 +138,6 @@ import com.hippo.yorozuya.collect.IntList
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.coroutines.executeAsync
 import rikka.core.res.resolveBoolean
 import rikka.core.res.resolveColor
 import kotlin.math.abs
@@ -1568,71 +1558,43 @@ class GalleryDetailScene :
                         .setCancelable(false)
                         .show()
                     lifecycleScope.launchIO {
-                        var success = false
-                        val url = EhUrl.getGalleryDetailUrl(
-                            newerVersion.gid,
-                            newerVersion.token,
-                            0,
-                            false,
-                            GET_FULL_HASH,
-                        )
-                        val request = EhRequestBuilder(url, EhUrl.referer).build()
-                        runCatching {
-                            okHttpClient.newCall(request).executeAsync().use { response ->
-                                val body = response.body.string()
-                                val result = GalleryDetailParser.parse(body)
-                                val spiderInfo = SpiderInfo(
-                                    result.gid,
-                                    result.token,
-                                    result.pages,
-                                    upgradeFrom = gd.gid,
-                                )
-                                SpiderQueen.readPreviews(body, 0, spiderInfo)
-                                val dirName = FileUtils.sanitizeFilename("${result.gid}-${EhUtils.getSuitableTitle(result)}")
-                                SpiderDen.perSafeDownloadDir(result.gid, dirName)!!.run {
-                                    createFile(SPIDER_INFO_FILENAME)!!.also {
-                                        spiderInfo.saveToUniFile(it)
-                                    }
-                                }
-                                // Start download
-                                val label = EhDownloadManager.getDownloadInfo(gd.gid)?.label
-                                val intent = Intent(activity, DownloadService::class.java)
-                                intent.action = DownloadService.ACTION_START
-                                intent.putExtra(DownloadService.KEY_LABEL, label)
-                                intent.putExtra(DownloadService.KEY_GALLERY_INFO, result)
-                                runCatching {
-                                    ContextCompat.startForegroundService(activity, intent)
-                                    success = true
-                                }.onFailure {
-                                    if (isAtLeastS && it is ForegroundServiceStartNotAllowedException) {
-                                        // App not in a valid state to start foreground service
-                                        withUIContext {
-                                            dialog.dismiss()
-                                            AlertDialog.Builder(context)
-                                                .setMessage(R.string.download_upgrade_service_failed)
-                                                .setPositiveButton(android.R.string.ok) { _: DialogInterface?, _: Int ->
-                                                    ContextCompat.startForegroundService(activity, intent)
-                                                    success = true
-                                                }
-                                                .show()
-                                        }
-                                    } else {
-                                        it.printStackTrace()
-                                    }
+                        when (
+                            val upgradeResult = GalleryUpgradeHelper.upgradeGallery(
+                                activity,
+                                gd.gid,
+                                newerVersion.gid,
+                                newerVersion.token,
+                            )
+                        ) {
+                            is GalleryUpgradeHelper.UpgradeResult.Success -> {
+                                withUIContext {
+                                    dialog.dismiss()
+                                    showTip(R.string.added_to_download_list, LENGTH_SHORT)
                                 }
                             }
-                        }.onFailure {
-                            it.printStackTrace()
-                        }
-                        withUIContext {
-                            dialog.dismiss()
-                            if (success) {
-                                showTip(R.string.added_to_download_list, LENGTH_SHORT)
-                            } else {
-                                showTip(R.string.download_state_failed, LENGTH_SHORT)
-                                launchIO {
-                                    SpiderDen.getGalleryDownloadDir(newerVersion.gid)?.takeIf { it.exists() }?.delete()
-                                    EhDownloadManager.removeDownloadDirname(newerVersion.gid)
+
+                            is GalleryUpgradeHelper.UpgradeResult.ForegroundServiceNotAllowed -> {
+                                withUIContext {
+                                    dialog.dismiss()
+                                    AlertDialog.Builder(context)
+                                        .setMessage(R.string.download_upgrade_service_failed)
+                                        .setPositiveButton(android.R.string.ok) { _: DialogInterface?, _: Int ->
+                                            ContextCompat.startForegroundService(activity, upgradeResult.intent)
+                                            showTip(R.string.added_to_download_list, LENGTH_SHORT)
+                                        }
+                                        .setOnCancelListener {
+                                            lifecycleScope.launchIO {
+                                                GalleryUpgradeHelper.cleanupFailedUpgrade(newerVersion.gid)
+                                            }
+                                        }
+                                        .show()
+                                }
+                            }
+
+                            is GalleryUpgradeHelper.UpgradeResult.Failed -> {
+                                withUIContext {
+                                    dialog.dismiss()
+                                    showTip(R.string.download_state_failed, LENGTH_SHORT)
                                 }
                             }
                         }

@@ -46,6 +46,9 @@ data class ListUrlBuilder(
     var pageTo: Int = -1,
     var isShowExpunged: Boolean = false,
 ) : Parcelable {
+    val isExcludeDownloaded: Boolean
+        get() = advanceSearch != -1 && (advanceSearch and AdvanceSearchTable.EXCLUDE_DOWNLOADED) != 0
+
     fun reset() {
         mode = MODE_NORMAL
         mPrev = null
@@ -297,13 +300,18 @@ data class ListUrlBuilder(
                 ub.addQuery("next", it)
             }
             // Advance search
-            if (advanceSearch != -1) {
+            val serverAdvanceSearch = if (advanceSearch != -1) {
+                advanceSearch and AdvanceSearchTable.EXCLUDE_DOWNLOADED.inv()
+            } else {
+                -1
+            }
+            if (advanceSearch != -1 && (serverAdvanceSearch != 0 || minRating != -1 || pageFrom != -1 || pageTo != -1)) {
                 ub.addQuery("advsearch", "1")
-                if (advanceSearch and AdvanceSearchTable.SH != 0) ub.addQuery("f_sh", "on")
-                if (advanceSearch and AdvanceSearchTable.STO != 0) ub.addQuery("f_sto", "on")
-                if (advanceSearch and AdvanceSearchTable.SFL != 0) ub.addQuery("f_sfl", "on")
-                if (advanceSearch and AdvanceSearchTable.SFU != 0) ub.addQuery("f_sfu", "on")
-                if (advanceSearch and AdvanceSearchTable.SFT != 0) ub.addQuery("f_sft", "on")
+                if (serverAdvanceSearch and AdvanceSearchTable.SH != 0) ub.addQuery("f_sh", "on")
+                if (serverAdvanceSearch and AdvanceSearchTable.STO != 0) ub.addQuery("f_sto", "on")
+                if (serverAdvanceSearch and AdvanceSearchTable.SFL != 0) ub.addQuery("f_sfl", "on")
+                if (serverAdvanceSearch and AdvanceSearchTable.SFU != 0) ub.addQuery("f_sfu", "on")
+                if (serverAdvanceSearch and AdvanceSearchTable.SFT != 0) ub.addQuery("f_sft", "on")
                 // Set min star
                 if (minRating != -1) {
                     ub.addQuery("f_sr", "on")

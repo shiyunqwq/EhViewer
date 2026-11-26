@@ -179,6 +179,7 @@
     <string name="search_sfl">Language</string>
     <string name="search_sfu">Uploader</string>
     <string name="search_sft">Tags</string>
+    <string name="search_exclude_downloaded">Exclude downloaded galleries</string>
     <string name="search_image">Image Search</string>
     <string name="select_image">Select image</string>
     <string name="select_image_first">Please select image first</string>
@@ -564,6 +565,17 @@
     <string name="settings_download_clean_redundancy_summary">Remove gallery images which are not in download list but in download location</string>
     <string name="settings_download_clean_redundancy_no_redundancy">No redundancy</string>
     <string name="settings_download_clean_redundancy_done">Redundancy cleaning completed, clean-up %d items totally</string>
+    <string name="download_check_above">Select all above</string>
+    <string name="settings_download_check_update">Check downloaded gallery updates</string>
+    <string name="settings_download_check_update_summary">Check all downloaded galleries for newer versions and overwrite them automatically</string>
+    <string name="settings_download_check_update_confirm">Check all downloaded galleries for updates? Galleries with newer versions will be downloaded and overwrite the original galleries.</string>
+    <string name="settings_download_check_update_running">Update check is already running</string>
+    <string name="settings_download_check_update_progress">Checking updates (%1$d/%2$d), found %3$d</string>
+    <string name="settings_download_check_update_empty">No downloaded galleries to check</string>
+    <string name="settings_download_check_update_cancelled">Check cancelled, %d update(s) queued</string>
+    <string name="settings_download_check_update_found">Check complete, found %d update(s) and started overwriting</string>
+    <string name="settings_download_check_update_done_with_errors">Check complete, no updates found (%d failed to check)</string>
+    <string name="settings_download_check_update_none">Check complete, all downloaded galleries are up to date</string>
     <string name="settings_privacy">Privacy</string>
     <string name="settings_privacy_pattern_protection_title">Pattern protection</string>
     <string name="settings_privacy_pattern_protection_not_set">Pattern protection has not been set</string>

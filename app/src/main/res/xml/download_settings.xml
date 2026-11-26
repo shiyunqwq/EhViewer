@@ -91,4 +91,10 @@
         android:title="@string/settings_download_clean_redundancy"
         app:iconSpaceReserved="false" />
 
+    <com.hippo.ehviewer.preference.CheckUpdateDownloadPreference
+        android:key="check_download_updates"
+        android:summary="@string/settings_download_check_update_summary"
+        android:title="@string/settings_download_check_update"
+        app:iconSpaceReserved="false" />
+
 </PreferenceScreen>

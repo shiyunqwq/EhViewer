@@ -35,9 +35,13 @@ import com.hippo.yorozuya.MathUtils
 import com.hippo.yorozuya.ObjectUtils
 import com.hippo.yorozuya.SimpleHandler
 import com.hippo.yorozuya.collect.LongList
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import java.util.LinkedList
+import java.util.concurrent.ConcurrentHashMap
 
 object DownloadManager : OnSpiderListener {
     // All download info list
@@ -50,7 +54,8 @@ object DownloadManager : OnSpiderListener {
     private val mMap: MutableMap<String?, LinkedList<DownloadInfo>>
 
     // All download dirname
-    private val mAllDownloadDirname = mutableMapOf<Long, String>()
+    private val mAllDownloadDirname = ConcurrentHashMap<Long, String>()
+    private val mCleanupScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // All labels without default label
     private val mLabelList: MutableList<DownloadLabel>
@@ -220,7 +225,7 @@ object DownloadManager : OnSpiderListener {
         }
     }
 
-    fun startDownload(galleryInfo: GalleryInfo, label: String?) {
+    fun startDownload(galleryInfo: GalleryInfo, label: String?, time: Long = -1L) {
         if (mCurrentTask != null && mCurrentTask!!.gid == galleryInfo.gid) {
             // It is current task
             return
@@ -251,7 +256,8 @@ object DownloadManager : OnSpiderListener {
             info = DownloadInfo(galleryInfo)
             info.label = label
             info.state = DownloadInfo.STATE_WAIT
-            info.time = System.currentTimeMillis()
+            val preserveTime = time > 0L
+            info.time = if (preserveTime) time else System.currentTimeMillis()
 
             // Add to label download list
             val list = getInfoListForLabel(info.label)
@@ -259,10 +265,15 @@ object DownloadManager : OnSpiderListener {
                 Log.e(TAG, "Can't find download info list with label: $label")
                 return
             }
-            list.addFirst(info)
-
-            // Add to all download list and map
-            mAllInfoList.addFirst(info)
+            if (preserveTime) {
+                list.add(info)
+                list.sortByDateDescending()
+                mAllInfoList.add(info)
+                mAllInfoList.sortByDateDescending()
+            } else {
+                list.addFirst(info)
+                mAllInfoList.addFirst(info)
+            }
             mAllInfoMap.put(galleryInfo.gid, info)
 
             // Add to wait list
@@ -272,8 +283,14 @@ object DownloadManager : OnSpiderListener {
             EhDB.putDownloadInfo(info)
 
             // Notify
-            for (l in mDownloadInfoListeners) {
-                l!!.onAdd(info, list, list.size - 1)
+            if (preserveTime) {
+                for (l in mDownloadInfoListeners) {
+                    l!!.onReload()
+                }
+            } else {
+                for (l in mDownloadInfoListeners) {
+                    l!!.onAdd(info, list, list.size - 1)
+                }
             }
             // Make sure download is running
             ensureDownload()
@@ -484,6 +501,30 @@ object DownloadManager : OnSpiderListener {
         // Notify mDownloadInfoListener
         for (l in mDownloadInfoListeners) {
             l!!.onUpdateAll()
+        }
+    }
+
+    private fun removeUpgradedOldGallery(oldGid: Long) {
+        val oldDir = SpiderDen.getGalleryDownloadDir(oldGid)
+        stopDownloadInternal(oldGid)
+        val oldInfo = mAllInfoMap[oldGid]
+        if (oldInfo != null) {
+            EhDB.removeDownloadInfo(oldInfo)
+            mAllInfoList.remove(oldInfo)
+            mAllInfoMap.remove(oldInfo.gid)
+            val oldList = getInfoListForLabel(oldInfo.label)
+            oldList?.remove(oldInfo)
+        }
+        removeDownloadDirname(oldGid)
+        if (oldDir != null) {
+            mCleanupScope.launch {
+                runCatching {
+                    oldDir.delete()
+                }
+            }
+        }
+        for (l in mDownloadInfoListeners) {
+            l!!.onReload()
         }
     }
 
@@ -1095,6 +1136,8 @@ object DownloadManager : OnSpiderListener {
                     mCurrentTask = null
                     val spider = mCurrentSpider
                     mCurrentSpider = null
+                    val completedUpgradeFrom = spider?.completedUpgradeFrom
+                    spider?.completedUpgradeFrom = null
                     // Release spider
                     if (spider != null) {
                         spider.removeOnSpiderListener(DownloadManager)
@@ -1127,6 +1170,10 @@ object DownloadManager : OnSpiderListener {
                             for (l in mDownloadInfoListeners) {
                                 l!!.onUpdate(info, list)
                             }
+                        }
+                        // Overwrite original gallery by removing it once the upgraded gallery completes
+                        if (info.state == DownloadInfo.STATE_FINISH && completedUpgradeFrom != null && completedUpgradeFrom != info.gid) {
+                            removeUpgradedOldGallery(completedUpgradeFrom)
                         }
                         // Start next download
                         ensureDownload()

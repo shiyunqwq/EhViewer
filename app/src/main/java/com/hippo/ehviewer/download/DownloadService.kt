@@ -104,8 +104,9 @@ class DownloadService :
         if (ACTION_START == action) {
             val gi = intent!!.getParcelableExtraCompat<GalleryInfo>(KEY_GALLERY_INFO)
             val label = intent.getStringExtra(KEY_LABEL)
+            val time = intent.getLongExtra(KEY_TIME, -1L)
             if (gi != null && mDownloadManager != null) {
-                mDownloadManager!!.startDownload(gi, label)
+                mDownloadManager!!.startDownload(gi, label, time)
             }
         } else if (ACTION_START_RANGE == action) {
             val gidList = intent!!.getParcelableExtraCompat<LongList>(KEY_GID_LIST)
@@ -533,6 +534,7 @@ class DownloadService :
         const val ACTION_CLEAR = "clear"
         const val KEY_GALLERY_INFO = "gallery_info"
         const val KEY_LABEL = "label"
+        const val KEY_TIME = "time"
         const val KEY_GID = "gid"
         const val KEY_GID_LIST = "gid_list"
         private const val ID_DOWNLOADING = 1
