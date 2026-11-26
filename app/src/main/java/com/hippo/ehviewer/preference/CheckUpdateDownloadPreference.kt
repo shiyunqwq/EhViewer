@@ -24,21 +24,18 @@ import androidx.appcompat.app.AlertDialog
 import com.google.android.material.snackbar.Snackbar
 import com.hippo.ehviewer.GetText
 import com.hippo.ehviewer.R
-import com.hippo.ehviewer.client.EhEngine
-import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.dao.DownloadInfo
 import com.hippo.ehviewer.download.DownloadManager
+import com.hippo.ehviewer.download.DownloadUpdateChecker
 import com.hippo.ehviewer.download.GalleryUpgradeHelper
 import com.hippo.ehviewer.ui.SettingsActivity
 import com.hippo.preference.DialogPreference
-import com.hippo.util.runSuspendCatching
 import com.hippo.util.withUIContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -78,7 +75,6 @@ class CheckUpdateDownloadPreference(
 
         val appContext = context.applicationContext
         singletonJob = launch {
-            var checkedCount = 0
             var updatedCount = 0
             var failedCount = 0
             var total = 0
@@ -93,81 +89,58 @@ class CheckUpdateDownloadPreference(
                 if (total == 0) {
                     return@launch
                 }
-                val queuedGids = HashSet<Long>()
-                for (info in downloadList) {
-                    ensureActive()
+                val checkResult = DownloadUpdateChecker.check(appContext, downloadList) { checked, totalCount, foundCount ->
                     withUIContext {
                         progressText.text = GetText.getString(
                             R.string.settings_download_check_update_progress,
-                            checkedCount,
-                            total,
-                            updatedCount,
+                            checked,
+                            totalCount,
+                            foundCount,
                         )
                     }
-                    val token = info.token
-                    if (!token.isNullOrEmpty()) {
-                        val url = EhUrl.getGalleryDetailUrl(info.gid, token, 0, false)
-                        val detail = runSuspendCatching {
-                            EhEngine.getGalleryDetail(url)
-                        }.onFailure { e ->
-                            if (e is CancellationException) throw e
-                            e.printStackTrace()
-                            failedCount++
-                        }.getOrNull()
+                }
+                failedCount += checkResult.failed
 
-                        val latestVersion = detail?.newerVersions?.lastOrNull()
-                        if (latestVersion != null &&
-                            latestVersion.gid != info.gid &&
-                            !queuedGids.contains(latestVersion.gid)
-                        ) {
-                            val alreadyDownloaded = withUIContext {
-                                DownloadManager.containDownloadInfo(latestVersion.gid)
-                            }
-                            if (!alreadyDownloaded) {
-                                queuedGids.add(latestVersion.gid)
-                                when (
-                                    val result = GalleryUpgradeHelper.upgradeGallery(
-                                        appContext,
-                                        info.gid,
-                                        latestVersion.gid,
-                                        latestVersion.token,
-                                    )
-                                ) {
-                                    is GalleryUpgradeHelper.UpgradeResult.Success -> {
-                                        updatedCount++
-                                    }
+                val queuedGids = HashSet<Long>()
+                for ((oldGid, latest) in checkResult.latestVersions) {
+                    ensureActive()
+                    val (latestGid, latestToken) = latest
+                    if (latestGid != oldGid && !queuedGids.contains(latestGid)) {
+                        val alreadyDownloaded = withUIContext {
+                            DownloadManager.containDownloadInfo(latestGid)
+                        }
+                        if (!alreadyDownloaded) {
+                            queuedGids.add(latestGid)
+                            when (
+                                val result = GalleryUpgradeHelper.upgradeGallery(
+                                    appContext,
+                                    oldGid,
+                                    latestGid,
+                                    latestToken,
+                                )
+                            ) {
+                                is GalleryUpgradeHelper.UpgradeResult.Success -> {
+                                    updatedCount++
+                                }
 
-                                    is GalleryUpgradeHelper.UpgradeResult.ForegroundServiceNotAllowed -> {
-                                        withUIContext {
-                                            DownloadManager.startDownload(
-                                                result.galleryDetail,
-                                                result.label,
-                                                result.time,
-                                                info.gid,
-                                            )
-                                        }
-                                        updatedCount++
+                                is GalleryUpgradeHelper.UpgradeResult.ForegroundServiceNotAllowed -> {
+                                    withUIContext {
+                                        DownloadManager.startDownload(
+                                            result.galleryDetail,
+                                            result.label,
+                                            result.time,
+                                            oldGid,
+                                        )
                                     }
+                                    updatedCount++
+                                }
 
-                                    is GalleryUpgradeHelper.UpgradeResult.Failed -> {
-                                        queuedGids.remove(latestVersion.gid)
-                                        failedCount++
-                                    }
+                                is GalleryUpgradeHelper.UpgradeResult.Failed -> {
+                                    queuedGids.remove(latestGid)
+                                    failedCount++
                                 }
                             }
                         }
-                    }
-                    checkedCount++
-                    withUIContext {
-                        progressText.text = GetText.getString(
-                            R.string.settings_download_check_update_progress,
-                            checkedCount,
-                            total,
-                            updatedCount,
-                        )
-                    }
-                    if (checkedCount < total) {
-                        delay(CHECK_INTERVAL_MS)
                     }
                 }
             } catch (e: CancellationException) {
@@ -195,10 +168,6 @@ class CheckUpdateDownloadPreference(
 
     private fun showTip(msg: String) {
         (context as? SettingsActivity)?.showTip(msg, Snackbar.LENGTH_LONG)
-    }
-
-    companion object {
-        private const val CHECK_INTERVAL_MS = 500L
     }
 }
 

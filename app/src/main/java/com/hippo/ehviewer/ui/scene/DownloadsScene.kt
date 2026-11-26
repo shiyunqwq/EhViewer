@@ -74,6 +74,9 @@ import com.hippo.ehviewer.download.DownloadUpdateChecker
 import com.hippo.ehviewer.download.DuplicateTitleFinder
 import com.hippo.ehviewer.spider.DownloadInfoMagics.encodeMagicRequest
 import com.hippo.ehviewer.spider.SpiderDen
+import com.hippo.ehviewer.spider.SpiderQueen
+import com.hippo.ehviewer.spider.readFromCache
+import com.hippo.ehviewer.spider.readFromUniFile
 import com.hippo.ehviewer.ui.GalleryActivity
 import com.hippo.ehviewer.widget.SimpleRatingView
 import com.hippo.scene.Announcer
@@ -94,6 +97,7 @@ import com.hippo.yorozuya.ViewUtils
 import com.hippo.yorozuya.collect.LongList
 import rikka.core.res.resolveColor
 import java.util.LinkedList
+import java.util.concurrent.ConcurrentHashMap
 
 @SuppressLint("RtlHardcoded")
 class DownloadsScene :
@@ -121,6 +125,7 @@ class DownloadsScene :
     private var mOutdatedGids: Set<Long> = emptySet()
     private var mDuplicateGroups: Map<Long, Int> = emptyMap()
     private var mFilterJob: Job? = null
+    private val mPageProgressCache = ConcurrentHashMap<Long, Pair<Int, Int>>()
 
     override fun getNavCheckedItem(): Int = R.id.nav_downloads
 
@@ -484,6 +489,15 @@ class DownloadsScene :
         setNavigationIcon(R.drawable.ic_baseline_menu_24)
     }
 
+    @SuppressLint("NotifyDataSetChanged")
+    override fun onResume() {
+        super.onResume()
+        if (mPageProgressCache.isNotEmpty()) {
+            mPageProgressCache.clear()
+            mAdapter?.notifyDataSetChanged()
+        }
+    }
+
     override fun onDestroyView() {
         super.onDestroyView()
         mFilterJob?.cancel()
@@ -559,6 +573,10 @@ class DownloadsScene :
                         lifecycleScope.launchNonCancellable {
                             // DownloadManager Actions
                             DownloadManager.resetAllReadingProgress()
+                            withUIContext {
+                                mPageProgressCache.clear()
+                                mAdapter?.notifyDataSetChanged()
+                            }
                         }
                     }.show()
                 return true
@@ -967,6 +985,49 @@ class DownloadsScene :
         } else {
             holder.move.visibility = View.GONE
         }
+        bindPageProgress(holder, info)
+    }
+
+    @SuppressLint("SetTextI18n")
+    private fun bindPageProgress(holder: DownloadHolder, info: DownloadInfo) {
+        val gid = info.gid
+        holder.pages.tag = gid
+        val cached = mPageProgressCache[gid]
+        if (cached != null) {
+            val (readPage, totalPages) = cached
+            if (totalPages > 0) {
+                holder.pages.text = "$readPage/$totalPages"
+                holder.pages.visibility = View.VISIBLE
+            } else {
+                holder.pages.visibility = View.GONE
+            }
+            return
+        }
+        holder.pages.visibility = View.GONE
+        lifecycleScope.launchIO {
+            val spiderInfo = SpiderDen.getGalleryDownloadDir(gid)
+                ?.findFile(SpiderQueen.SPIDER_INFO_FILENAME)
+                ?.let { readFromUniFile(it) }
+                ?: readFromCache(gid)
+            val totalPages = spiderInfo?.pages ?: info.pages.coerceAtLeast(0)
+            val startPage = spiderInfo?.startPage ?: 0
+            val readPage = if (totalPages > 0 && startPage > 0) {
+                (startPage + 1).coerceAtMost(totalPages)
+            } else {
+                0
+            }
+            mPageProgressCache[gid] = readPage to totalPages
+            withUIContext {
+                if (isAdded && holder.pages.tag == gid && info.state != DownloadInfo.STATE_DOWNLOAD) {
+                    if (totalPages > 0) {
+                        holder.pages.text = "$readPage/$totalPages"
+                        holder.pages.visibility = View.VISIBLE
+                    } else {
+                        holder.pages.visibility = View.GONE
+                    }
+                }
+            }
+        }
     }
 
     @SuppressLint("SetTextI18n")
@@ -974,6 +1035,7 @@ class DownloadsScene :
         holder.uploader.visibility = View.GONE
         holder.rating.visibility = View.GONE
         holder.category.visibility = View.GONE
+        holder.pages.visibility = View.GONE
         holder.state.visibility = View.GONE
         holder.progressBar.visibility = View.VISIBLE
         holder.percent.visibility = View.VISIBLE
@@ -1193,6 +1255,7 @@ class DownloadsScene :
         val uploader: TextView = itemView.findViewById(R.id.uploader)
         val rating: SimpleRatingView = itemView.findViewById(R.id.rating)
         val category: TextView = itemView.findViewById(R.id.category)
+        val pages: TextView = itemView.findViewById(R.id.pages)
         val start: View = itemView.findViewById(R.id.start)
         val stop: View = itemView.findViewById(R.id.stop)
         val move: View = itemView.findViewById(R.id.move)

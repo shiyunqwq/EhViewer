@@ -76,6 +76,17 @@
             android:textAllCaps="true"
             android:textColor="@android:color/white" />
 
+        <TextView
+            android:id="@+id/pages"
+            style="@style/CardMessage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignBaseline="@id/category"
+            android:layout_marginLeft="8dp"
+            android:layout_toRightOf="@id/category"
+            android:maxLines="1"
+            android:visibility="gone" />
+
         <FrameLayout
             android:id="@+id/actions"
             android:layout_width="wrap_content"

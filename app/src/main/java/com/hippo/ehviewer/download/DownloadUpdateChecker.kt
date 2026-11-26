@@ -17,32 +17,62 @@ package com.hippo.ehviewer.download
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.hippo.ehviewer.client.EhEngine
+import com.hippo.ehviewer.EhApplication
+import com.hippo.ehviewer.client.EhRequestBuilder
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.data.GalleryInfo
 import com.hippo.util.runSuspendCatching
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import okhttp3.Dispatcher
+import okhttp3.coroutines.executeAsync
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Checks downloaded galleries for newer versions and remembers which ones are outdated,
- * so the download list can be filtered by "has update" without re-checking every time.
+ * Checks downloaded galleries for newer versions concurrently using lightweight HTML matching
+ * on `<div id="gnd">`, and persists which ones are outdated so the download list can filter
+ * by "has update" without re-checking every time.
  */
 object DownloadUpdateChecker {
     private const val PREF_NAME = "download_update_checker"
     private const val KEY_OUTDATED_GIDS = "outdated_gids"
     private const val KEY_HAS_CHECKED = "has_checked"
 
-    // Same interval as the "check update" preference to avoid hammering the server
-    private const val CHECK_INTERVAL_MS = 500L
+    // High concurrency with a dedicated dispatcher (default OkHttp maxRequestsPerHost is 5)
+    private const val CONCURRENCY = 10
+
+    private val GND_MARKER = "id=\"gnd\""
+    private val PATTERN_GALLERY_LINK = Regex("""/g/(\d+)/([0-9a-f]+)/""")
+
+    private val checkOkHttpClient by lazy {
+        val dispatcher = Dispatcher().apply {
+            maxRequests = CONCURRENCY * 2
+            maxRequestsPerHost = CONCURRENCY
+        }
+        EhApplication.nonCacheOkHttpClient.newBuilder()
+            .dispatcher(dispatcher)
+            .build()
+    }
 
     private val lock = Any()
     private var outdated: MutableSet<Long>? = null
     private var hasChecked = false
 
-    class Result(val total: Int, val checked: Int, val found: Int, val failed: Int)
+    class Result(
+        val total: Int,
+        val checked: Int,
+        val found: Int,
+        val failed: Int,
+        /** oldGid -> (latestGid, latestToken) for galleries that have a newer version */
+        val latestVersions: Map<Long, Pair<Long, String>> = emptyMap(),
+    )
 
     private fun prefs(context: Context): SharedPreferences = context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 
@@ -79,7 +109,7 @@ object DownloadUpdateChecker {
     }
 
     /**
-     * Check every gallery in [infos] one by one. Results are saved incrementally, so a
+     * Check every gallery in [infos] concurrently. Results are saved incrementally, so a
      * cancelled check still keeps what has been found so far.
      */
     suspend fun check(
@@ -89,43 +119,125 @@ object DownloadUpdateChecker {
     ): Result {
         val set = ensureLoaded(context)
         val total = infos.size
-        var checked = 0
-        var found = 0
-        var failed = 0
+        val checked = AtomicInteger(0)
+        val found = AtomicInteger(0)
+        val failed = AtomicInteger(0)
+        val rateLimited = AtomicBoolean(false)
+        val latestVersions = ConcurrentHashMap<Long, Pair<Long, String>>()
+
         try {
             onProgress(0, total, 0)
-            for ((index, info) in infos.withIndex()) {
-                currentCoroutineContext().ensureActive()
-                val token = info.token
-                if (!token.isNullOrEmpty()) {
-                    val url = EhUrl.getGalleryDetailUrl(info.gid, token, 0, false)
-                    val detail = runSuspendCatching {
-                        EhEngine.getGalleryDetail(url)
-                    }.onFailure { e ->
-                        if (e is CancellationException) throw e
-                        e.printStackTrace()
-                        failed++
-                    }.getOrNull()
-                    if (detail != null) {
-                        val hasNewer = detail.newerVersions.any { it.gid != info.gid }
-                        synchronized(lock) {
-                            if (hasNewer) set.add(info.gid) else set.remove(info.gid)
+            if (total > 0) {
+                val semaphore = Semaphore(CONCURRENCY)
+                val referer = EhUrl.referer
+                coroutineScope {
+                    for (info in infos) {
+                        ensureActive()
+                        launch(Dispatchers.IO) {
+                            semaphore.withPermit {
+                                ensureActive()
+                                if (rateLimited.get()) {
+                                    failed.incrementAndGet()
+                                    val c = checked.incrementAndGet()
+                                    onProgress(c, total, found.get())
+                                    return@withPermit
+                                }
+                                val token = info.token
+                                if (token.isNullOrEmpty()) {
+                                    failed.incrementAndGet()
+                                } else {
+                                    val checkOutcome = checkSingle(info.gid, token, referer, rateLimited)
+                                    when (checkOutcome) {
+                                        is SingleOutcome.HasUpdate -> {
+                                            synchronized(lock) { set.add(info.gid) }
+                                            latestVersions[info.gid] = checkOutcome.latestGid to checkOutcome.latestToken
+                                            found.incrementAndGet()
+                                        }
+
+                                        SingleOutcome.UpToDate -> {
+                                            synchronized(lock) { set.remove(info.gid) }
+                                        }
+
+                                        SingleOutcome.Failed -> {
+                                            failed.incrementAndGet()
+                                        }
+                                    }
+                                }
+                                val c = checked.incrementAndGet()
+                                onProgress(c, total, found.get())
+                            }
                         }
-                        if (hasNewer) found++
                     }
-                } else {
-                    failed++
-                }
-                checked++
-                onProgress(checked, total, found)
-                if (index < total - 1) {
-                    delay(CHECK_INTERVAL_MS)
                 }
             }
         } finally {
             synchronized(lock) { hasChecked = true }
             save(context)
         }
-        return Result(total, checked, found, failed)
+        return Result(total, checked.get(), found.get(), failed.get(), latestVersions)
+    }
+
+    private sealed interface SingleOutcome {
+        data class HasUpdate(val latestGid: Long, val latestToken: String) : SingleOutcome
+        data object UpToDate : SingleOutcome
+        data object Failed : SingleOutcome
+    }
+
+    private suspend fun checkSingle(
+        gid: Long,
+        token: String,
+        referer: String,
+        rateLimited: AtomicBoolean,
+    ): SingleOutcome {
+        val url = EhUrl.getGalleryDetailUrl(gid, token, 0, false)
+        val request = EhRequestBuilder(url, referer).build()
+        return runSuspendCatching {
+            checkOkHttpClient.newCall(request).executeAsync().use { response ->
+                if (response.code == 429) {
+                    rateLimited.set(true)
+                    return@use SingleOutcome.Failed
+                }
+                val body = response.body.string()
+                if (!response.isSuccessful) {
+                    return@use SingleOutcome.Failed
+                }
+                if (body.contains("Your IP address has been temporarily banned")) {
+                    rateLimited.set(true)
+                    return@use SingleOutcome.Failed
+                }
+                val gndIndex = body.indexOf(GND_MARKER)
+                if (gndIndex < 0) {
+                    // Valid gallery page without <div id="gnd"> means no newer versions
+                    return@use if (body.contains("id=\"gd1\"") || body.contains("id=\"gn\"")) {
+                        SingleOutcome.UpToDate
+                    } else {
+                        SingleOutcome.Failed
+                    }
+                }
+                val endIndex = body.indexOf("</div>", gndIndex)
+                val gndSection = if (endIndex > gndIndex) {
+                    body.substring(gndIndex, endIndex)
+                } else {
+                    body.substring(gndIndex)
+                }
+                var latest: Pair<Long, String>? = null
+                for (match in PATTERN_GALLERY_LINK.findAll(gndSection)) {
+                    val newGid = match.groupValues[1].toLongOrNull() ?: continue
+                    val newToken = match.groupValues[2]
+                    if (newGid != gid) {
+                        latest = newGid to newToken
+                    }
+                }
+                if (latest != null) {
+                    SingleOutcome.HasUpdate(latest.first, latest.second)
+                } else {
+                    SingleOutcome.UpToDate
+                }
+            }
+        }.getOrElse { e ->
+            if (e is CancellationException) throw e
+            e.printStackTrace()
+            SingleOutcome.Failed
+        }
     }
 }
