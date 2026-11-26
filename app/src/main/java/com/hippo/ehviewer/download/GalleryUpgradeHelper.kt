@@ -38,7 +38,11 @@ import kotlinx.coroutines.CancellationException
 import okhttp3.coroutines.executeAsync
 
 object GalleryUpgradeHelper {
-    sealed class UpgradeResult {
+    suspend fun hasUpdate(context: Context, oldGid: Long): Boolean {
+        // Placeholder implementation: always returns false.
+        // Real implementation would query server for newer version info.
+        return false
+    }
         data object Success : UpgradeResult()
         data class ForegroundServiceNotAllowed(
             val intent: Intent,
@@ -63,6 +67,10 @@ object GalleryUpgradeHelper {
             ?.findFile(SpiderQueen.SPIDER_INFO_FILENAME)
             ?.let { readFromUniFile(it)?.startPage }
             ?: 0
+        // Preserve already downloaded images: move them to the new directory after it is created
+        var oldDirForMove: java.io.File? = null
+        // Preserve already downloaded images by moving them to the new directory after it is created
+        var oldDirForMove: java.io.File? = null
 
         val url = EhUrl.getGalleryDetailUrl(
             newGid,
@@ -89,6 +97,20 @@ object GalleryUpgradeHelper {
                 val dirName = FileUtils.sanitizeFilename("${result.gid}-${EhUtils.getSuitableTitle(result)}")
                 val downloadDir = SpiderDen.perSafeDownloadDir(result.gid, dirName)
                     ?: return UpgradeResult.Failed
+                // 将旧版本的已下载文件移动到新目录（保留已下载的图片）
+                val oldDir = SpiderDen.getGalleryDownloadDir(oldGid)
+                if (oldDir != null && oldDir.exists()) {
+                    oldDir.listFiles()?.forEach { file ->
+                        if (file.name != SpiderQueen.SPIDER_INFO_FILENAME) {
+                            // 创建目标文件并移动
+                            val target = downloadDir.createFile(file.name) ?: return@forEach
+                            file.moveTo(target)
+                        }
+                    }
+                    // 删除旧目录的元数据（保持图片已移走）
+                    oldDir.delete()
+                }
+
                 createdDir = true
                 val spiderInfoFile = downloadDir.createFile(SpiderQueen.SPIDER_INFO_FILENAME)
                     ?: run {
