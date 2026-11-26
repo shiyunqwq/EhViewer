@@ -1304,8 +1304,8 @@ class GalleryDetailScene :
 
             mDownload -> {
                 val downloadState = EhDownloadManager.getDownloadState(galleryDetail.gid)
-                when (downloadState) {
-                    DownloadInfo.STATE_INVALID -> {
+                when {
+                    downloadState == DownloadInfo.STATE_INVALID -> {
                         if (mBasicInfoOnly) {
                             showTip(R.string.error_cannot_find_gallery, LENGTH_SHORT)
                             return
@@ -1314,7 +1314,12 @@ class GalleryDetailScene :
                         CommonOperations.startDownload(activity, galleryDetail, false)
                     }
 
-                    DownloadInfo.STATE_FINISH if galleryDetail.newerVersions.isNotEmpty() -> {
+                    galleryDetail.newerVersions.isNotEmpty() &&
+                        (
+                            downloadState == DownloadInfo.STATE_NONE ||
+                                downloadState == DownloadInfo.STATE_FINISH ||
+                                downloadState == DownloadInfo.STATE_FAILED
+                            ) -> {
                         showGalleryUpgradeDialog(galleryDetail)
                     }
 
@@ -1803,24 +1808,37 @@ class GalleryDetailScene :
 
     private fun updateDownloadText() {
         mDownload?.run {
+            val hasNewer = mGalleryDetail != null && mGalleryDetail!!.newerVersions.isNotEmpty()
             when (mDownloadState) {
                 DownloadInfo.STATE_INVALID -> setText(R.string.download)
 
-                DownloadInfo.STATE_NONE -> setText(R.string.download_state_none)
+                DownloadInfo.STATE_NONE -> setText(
+                    if (hasNewer) {
+                        R.string.download_upgradeable
+                    } else {
+                        R.string.download_state_none
+                    },
+                )
 
                 DownloadInfo.STATE_WAIT -> setText(R.string.download_state_wait)
 
                 DownloadInfo.STATE_DOWNLOAD -> setText(R.string.download_state_downloading)
 
                 DownloadInfo.STATE_FINISH -> setText(
-                    if (mGalleryDetail != null && mGalleryDetail!!.newerVersions.isNotEmpty()) {
+                    if (hasNewer) {
                         R.string.download_upgradeable
                     } else {
                         R.string.download_state_downloaded
                     },
                 )
 
-                DownloadInfo.STATE_FAILED -> setText(R.string.download_state_failed)
+                DownloadInfo.STATE_FAILED -> setText(
+                    if (hasNewer) {
+                        R.string.download_upgradeable
+                    } else {
+                        R.string.download_state_failed
+                    },
+                )
             }
         }
     }

@@ -105,6 +105,19 @@
             android:layout_height="wrap_content"
             app:srcCompat="@drawable/v_folder_move_x24" />
 
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            style="@style/Widget.FloatingActionButton.Accent.Mini"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/download_upgrade_selected"
+            app:srcCompat="@drawable/v_refresh_dark_x24" />
+
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            style="@style/Widget.FloatingActionButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:srcCompat="@drawable/v_close_dark_x24" />
+
     </com.hippo.widget.FabLayout>
 
 </FrameLayout>

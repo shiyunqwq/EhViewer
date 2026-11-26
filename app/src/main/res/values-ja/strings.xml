@@ -333,6 +333,7 @@
     <string name="download_filter_title">フィルターのタイトル</string>
     <string name="download_filter_has_update">更新あり</string>
     <string name="download_filter_duplicate_title">重複タイトル</string>
+    <string name="download_upgrade_selected">最新版に更新</string>
     <string name="download_update_last_result">前回のチェック結果を表示 (%d)</string>
     <string name="download_update_recheck">更新を再チェック</string>
     <string name="download_update_check_message">現在のラベル内のギャラリーに新しいバージョンがあるか順番に確認します。件数が多い場合は時間がかかることがあります。</string>

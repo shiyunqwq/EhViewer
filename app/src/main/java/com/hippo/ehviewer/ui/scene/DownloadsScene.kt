@@ -37,6 +37,7 @@ import androidx.appcompat.widget.Toolbar
 import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
 import androidx.core.util.size
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -76,6 +77,7 @@ import com.hippo.ehviewer.download.DownloadService
 import com.hippo.ehviewer.download.DownloadService.Companion.clear
 import com.hippo.ehviewer.download.DownloadUpdateChecker
 import com.hippo.ehviewer.download.DuplicateTitleFinder
+import com.hippo.ehviewer.download.GalleryUpgradeHelper
 import com.hippo.ehviewer.spider.DownloadInfoMagics.encodeMagicRequest
 import com.hippo.ehviewer.spider.SpiderDen
 import com.hippo.ehviewer.spider.SpiderQueen
@@ -103,6 +105,7 @@ import com.hippo.yorozuya.collect.LongList
 import rikka.core.res.resolveColor
 import java.util.LinkedList
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 @SuppressLint("RtlHardcoded")
 class DownloadsScene :
@@ -404,6 +407,110 @@ class DownloadsScene :
         }
     }
 
+    private fun startUpgradeSelected(targets: List<DownloadInfo>) {
+        val context = context ?: return
+        if (mFilterJob?.isActive == true || targets.isEmpty()) return
+        val appContext = context.applicationContext
+        val list = ArrayList(targets)
+
+        @SuppressLint("InflateParams")
+        val dialogView = layoutInflater.inflate(R.layout.preference_dialog_check_update, null)
+        val progressText = dialogView.findViewById<TextView>(R.id.progress_text)
+        val dialog = AlertDialog.Builder(context)
+            .setTitle(R.string.download_upgrade_selected)
+            .setView(dialogView)
+            .setCancelable(false)
+            .setNegativeButton(android.R.string.cancel) { _: DialogInterface?, _: Int -> mFilterJob?.cancel() }
+            .show()
+
+        mFilterJob = lifecycleScope.launchIO {
+            val updatedCount = AtomicInteger(0)
+            val failedCount = AtomicInteger(0)
+            val queuedGids = ConcurrentHashMap.newKeySet<Long>()
+            var cancelled = false
+            try {
+                val checkResult = DownloadUpdateChecker.check(
+                    context = appContext,
+                    infos = list,
+                    onFoundUpdate = { oldGid, latestGid, latestToken ->
+                        if (latestGid != oldGid && queuedGids.add(latestGid)) {
+                            val alreadyDownloaded = withUIContext {
+                                DownloadManager.containDownloadInfo(latestGid)
+                            }
+                            if (!alreadyDownloaded) {
+                                when (
+                                    val result = GalleryUpgradeHelper.upgradeGallery(
+                                        appContext,
+                                        oldGid,
+                                        latestGid,
+                                        latestToken,
+                                    )
+                                ) {
+                                    is GalleryUpgradeHelper.UpgradeResult.Success -> {
+                                        updatedCount.incrementAndGet()
+                                    }
+
+                                    is GalleryUpgradeHelper.UpgradeResult.ForegroundServiceNotAllowed -> {
+                                        withUIContext {
+                                            DownloadManager.startDownload(
+                                                result.galleryDetail,
+                                                result.label,
+                                                result.time,
+                                                oldGid,
+                                            )
+                                        }
+                                        updatedCount.incrementAndGet()
+                                    }
+
+                                    is GalleryUpgradeHelper.UpgradeResult.Failed -> {
+                                        queuedGids.remove(latestGid)
+                                        failedCount.incrementAndGet()
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    onProgress = { checked, totalCount, foundCount ->
+                        withUIContext {
+                            progressText.text = appContext.getString(
+                                R.string.settings_download_check_update_progress,
+                                checked,
+                                totalCount,
+                                foundCount,
+                            )
+                        }
+                    },
+                )
+                failedCount.addAndGet(checkResult.failed)
+            } catch (e: CancellationException) {
+                cancelled = true
+                throw e
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) {
+                    runCatching {
+                        if (dialog.isShowing) dialog.dismiss()
+                    }
+                    if (isAdded) {
+                        val updated = updatedCount.get()
+                        val failed = failedCount.get()
+                        val msg = when {
+                            cancelled -> appContext.getString(R.string.settings_download_check_update_cancelled, updated)
+                            updated > 0 -> appContext.getString(R.string.settings_download_check_update_found, updated)
+                            failed > 0 -> appContext.getString(R.string.settings_download_check_update_done_with_errors, failed)
+                            else -> appContext.getString(R.string.settings_download_check_update_none)
+                        }
+                        showTip(msg, LENGTH_LONG)
+                        if (mType == TYPE_HAS_UPDATE) {
+                            mOutdatedGids = DownloadUpdateChecker.outdatedGids(appContext)
+                            updateForLabel()
+                            updateView()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun updateTitle() {
         setTitle(
             getString(
@@ -485,6 +592,9 @@ class DownloadsScene :
         mFabLayout!!.setOnClickFabListener(this)
         mFabLayout!!.getSecondaryFabAt(1)?.let {
             TooltipCompat.setTooltipText(it, getString(R.string.download_check_above))
+        }
+        mFabLayout!!.getSecondaryFabAt(7)?.let {
+            TooltipCompat.setTooltipText(it, getString(R.string.download_upgrade_selected))
         }
         addAboveSnackView(mFabLayout!!)
         updateView()
@@ -782,7 +892,7 @@ class DownloadsScene :
             var gidList: LongList? = null
             var downloadInfoList: MutableList<DownloadInfo>? = null
             val collectGid = position == 3 || position == 4 || position == 5 // Start, Stop, Delete
-            val collectDownloadInfo = position == 2 || position == 5 || position == 6 // Pin, Delete, Move
+            val collectDownloadInfo = position == 2 || position == 5 || position == 6 || position == 7 // Pin, Delete, Move, Upgrade
             if (collectGid) {
                 gidList = LongList()
             }
@@ -866,6 +976,12 @@ class DownloadsScene :
                         .setTitle(R.string.download_move_dialog_title)
                         .setItems(labels, helper)
                         .show()
+                }
+
+                // Upgrade selected to latest version
+                7 -> {
+                    recyclerView.outOfCustomChoiceMode()
+                    startUpgradeSelected(downloadInfoList!!)
                 }
             }
         }

@@ -369,6 +369,7 @@
     <string name="download_filter_title">Filter title</string>
     <string name="download_filter_has_update">Has update</string>
     <string name="download_filter_duplicate_title">Duplicate title</string>
+    <string name="download_upgrade_selected">Update to latest</string>
     <string name="download_update_last_result">Show last check result (%d)</string>
     <string name="download_update_recheck">Check for updates again</string>
     <string name="download_update_check_message">Check downloaded galleries in the current label for newer versions? This may take a while if there are many galleries.</string>

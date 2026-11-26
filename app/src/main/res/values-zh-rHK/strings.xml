@@ -340,6 +340,7 @@
     <string name="download_filter_title">篩選標題</string>
     <string name="download_filter_has_update">有更新</string>
     <string name="download_filter_duplicate_title">重複標題</string>
+    <string name="download_upgrade_selected">更新到最新版</string>
     <string name="download_update_last_result">檢視上次檢測結果（%d 個）</string>
     <string name="download_update_recheck">重新檢測更新</string>
     <string name="download_update_check_message">將逐個檢測目前標籤下的畫廊是否有新版本，畫廊較多時可能需要一些時間，是否繼續？</string>
