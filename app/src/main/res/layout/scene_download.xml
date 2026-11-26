@@ -105,14 +105,6 @@
             android:layout_height="wrap_content"
             app:srcCompat="@drawable/v_folder_move_x24" />
 
-            <Switch
-        android:id="@+id/switch_show_updates"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/show_updates_only"
-        android:layout_gravity="end|top"
-        android:padding="8dp"/>
-
     </com.hippo.widget.FabLayout>
 
 </FrameLayout>

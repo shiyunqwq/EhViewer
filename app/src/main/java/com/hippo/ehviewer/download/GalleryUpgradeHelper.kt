@@ -32,17 +32,17 @@ import com.hippo.ehviewer.spider.readFromUniFile
 import com.hippo.ehviewer.spider.saveToUniFile
 import com.hippo.util.isAtLeastS
 import com.hippo.util.runSuspendCatching
+import com.hippo.util.sendTo
 import com.hippo.util.withUIContext
 import com.hippo.yorozuya.FileUtils
 import kotlinx.coroutines.CancellationException
 import okhttp3.coroutines.executeAsync
 
 object GalleryUpgradeHelper {
-    suspend fun hasUpdate(context: Context, oldGid: Long): Boolean {
-        // Placeholder implementation: always returns false.
-        // Real implementation would query server for newer version info.
-        return false
-    }
+    // ---------------------------------------------------------------------
+    //  Result type for the upgrade operation
+    // ---------------------------------------------------------------------
+    sealed class UpgradeResult {
         data object Success : UpgradeResult()
         data class ForegroundServiceNotAllowed(
             val intent: Intent,
@@ -52,6 +52,15 @@ object GalleryUpgradeHelper {
         ) : UpgradeResult()
 
         data object Failed : UpgradeResult()
+    }
+
+    // ---------------------------------------------------------------------
+    //  Simple placeholder – real implementation should query server for newer
+    // ---------------------------------------------------------------------
+    @Suppress("UNUSED_PARAMETER", "RedundantSuspendModifier")
+    suspend fun hasUpdate(context: Context, oldGid: Long): Boolean {
+        // TODO: implement real check; for now always return false
+        return false
     }
 
     suspend fun upgradeGallery(
@@ -67,10 +76,6 @@ object GalleryUpgradeHelper {
             ?.findFile(SpiderQueen.SPIDER_INFO_FILENAME)
             ?.let { readFromUniFile(it)?.startPage }
             ?: 0
-        // Preserve already downloaded images: move them to the new directory after it is created
-        var oldDirForMove: java.io.File? = null
-        // Preserve already downloaded images by moving them to the new directory after it is created
-        var oldDirForMove: java.io.File? = null
 
         val url = EhUrl.getGalleryDetailUrl(
             newGid,
@@ -101,10 +106,14 @@ object GalleryUpgradeHelper {
                 val oldDir = SpiderDen.getGalleryDownloadDir(oldGid)
                 if (oldDir != null && oldDir.exists()) {
                     oldDir.listFiles()?.forEach { file ->
-                        if (file.name != SpiderQueen.SPIDER_INFO_FILENAME) {
-                            // 创建目标文件并移动
-                            val target = downloadDir.createFile(file.name) ?: return@forEach
-                            file.moveTo(target)
+                        val name = file.name ?: return@forEach
+                        if (file.isFile && name != SpiderQueen.SPIDER_INFO_FILENAME) {
+                            // 创建目标文件，复制内容后删除源文件（UniFile 没有 moveTo）
+                            val target = downloadDir.createFile(name) ?: return@forEach
+                            runCatching {
+                                file sendTo target
+                                file.delete()
+                            }.onFailure { it.printStackTrace() }
                         }
                     }
                     // 删除旧目录的元数据（保持图片已移走）
