@@ -36,9 +36,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 class CheckUpdateDownloadPreference(
     context: Context,
@@ -75,8 +76,8 @@ class CheckUpdateDownloadPreference(
 
         val appContext = context.applicationContext
         singletonJob = launch {
-            var updatedCount = 0
-            var failedCount = 0
+            val updatedCount = AtomicInteger(0)
+            val failedCount = AtomicInteger(0)
             var total = 0
             var cancelled = false
             try {
@@ -89,60 +90,60 @@ class CheckUpdateDownloadPreference(
                 if (total == 0) {
                     return@launch
                 }
-                val checkResult = DownloadUpdateChecker.check(appContext, downloadList) { checked, totalCount, foundCount ->
-                    withUIContext {
-                        progressText.text = GetText.getString(
-                            R.string.settings_download_check_update_progress,
-                            checked,
-                            totalCount,
-                            foundCount,
-                        )
-                    }
-                }
-                failedCount += checkResult.failed
-
-                val queuedGids = HashSet<Long>()
-                for ((oldGid, latest) in checkResult.latestVersions) {
-                    ensureActive()
-                    val (latestGid, latestToken) = latest
-                    if (latestGid != oldGid && !queuedGids.contains(latestGid)) {
-                        val alreadyDownloaded = withUIContext {
-                            DownloadManager.containDownloadInfo(latestGid)
-                        }
-                        if (!alreadyDownloaded) {
-                            queuedGids.add(latestGid)
-                            when (
-                                val result = GalleryUpgradeHelper.upgradeGallery(
-                                    appContext,
-                                    oldGid,
-                                    latestGid,
-                                    latestToken,
-                                )
-                            ) {
-                                is GalleryUpgradeHelper.UpgradeResult.Success -> {
-                                    updatedCount++
-                                }
-
-                                is GalleryUpgradeHelper.UpgradeResult.ForegroundServiceNotAllowed -> {
-                                    withUIContext {
-                                        DownloadManager.startDownload(
-                                            result.galleryDetail,
-                                            result.label,
-                                            result.time,
-                                            oldGid,
-                                        )
+                val queuedGids = ConcurrentHashMap.newKeySet<Long>()
+                val checkResult = DownloadUpdateChecker.check(
+                    context = appContext,
+                    infos = downloadList,
+                    onFoundUpdate = { oldGid, latestGid, latestToken ->
+                        if (latestGid != oldGid && queuedGids.add(latestGid)) {
+                            val alreadyDownloaded = withUIContext {
+                                DownloadManager.containDownloadInfo(latestGid)
+                            }
+                            if (!alreadyDownloaded) {
+                                when (
+                                    val result = GalleryUpgradeHelper.upgradeGallery(
+                                        appContext,
+                                        oldGid,
+                                        latestGid,
+                                        latestToken,
+                                    )
+                                ) {
+                                    is GalleryUpgradeHelper.UpgradeResult.Success -> {
+                                        updatedCount.incrementAndGet()
                                     }
-                                    updatedCount++
-                                }
 
-                                is GalleryUpgradeHelper.UpgradeResult.Failed -> {
-                                    queuedGids.remove(latestGid)
-                                    failedCount++
+                                    is GalleryUpgradeHelper.UpgradeResult.ForegroundServiceNotAllowed -> {
+                                        withUIContext {
+                                            DownloadManager.startDownload(
+                                                result.galleryDetail,
+                                                result.label,
+                                                result.time,
+                                                oldGid,
+                                            )
+                                        }
+                                        updatedCount.incrementAndGet()
+                                    }
+
+                                    is GalleryUpgradeHelper.UpgradeResult.Failed -> {
+                                        queuedGids.remove(latestGid)
+                                        failedCount.incrementAndGet()
+                                    }
                                 }
                             }
                         }
-                    }
-                }
+                    },
+                    onProgress = { checked, totalCount, foundCount ->
+                        withUIContext {
+                            progressText.text = GetText.getString(
+                                R.string.settings_download_check_update_progress,
+                                checked,
+                                totalCount,
+                                foundCount,
+                            )
+                        }
+                    },
+                )
+                failedCount.addAndGet(checkResult.failed)
             } catch (e: CancellationException) {
                 cancelled = true
                 throw e
@@ -153,11 +154,13 @@ class CheckUpdateDownloadPreference(
                             progressDialog.dismiss()
                         }
                     }
+                    val updated = updatedCount.get()
+                    val failed = failedCount.get()
                     val msg = when {
                         total == 0 -> GetText.getString(R.string.settings_download_check_update_empty)
-                        cancelled -> GetText.getString(R.string.settings_download_check_update_cancelled, updatedCount)
-                        updatedCount > 0 -> GetText.getString(R.string.settings_download_check_update_found, updatedCount)
-                        failedCount > 0 -> GetText.getString(R.string.settings_download_check_update_done_with_errors, failedCount)
+                        cancelled -> GetText.getString(R.string.settings_download_check_update_cancelled, updated)
+                        updated > 0 -> GetText.getString(R.string.settings_download_check_update_found, updated)
+                        failed > 0 -> GetText.getString(R.string.settings_download_check_update_done_with_errors, failed)
                         else -> GetText.getString(R.string.settings_download_check_update_none)
                     }
                     showTip(msg)

@@ -17,6 +17,7 @@ package com.hippo.ehviewer.ui.scene
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
 import android.os.Bundle
@@ -63,7 +64,10 @@ import com.hippo.easyrecyclerview.MarginItemDecoration
 import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.R
 import com.hippo.ehviewer.Settings
+import com.hippo.ehviewer.client.EhEngine
+import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.EhUtils
+import com.hippo.ehviewer.client.data.BaseGalleryInfo
 import com.hippo.ehviewer.client.getThumbKey
 import com.hippo.ehviewer.dao.DownloadInfo
 import com.hippo.ehviewer.download.DownloadManager
@@ -84,6 +88,7 @@ import com.hippo.unifile.UniFile
 import com.hippo.util.launchIO
 import com.hippo.util.launchNonCancellable
 import com.hippo.util.launchUI
+import com.hippo.util.runSuspendCatching
 import com.hippo.util.withUIContext
 import com.hippo.view.ViewTransition
 import com.hippo.widget.FabLayout
@@ -125,7 +130,10 @@ class DownloadsScene :
     private var mOutdatedGids: Set<Long> = emptySet()
     private var mDuplicateGroups: Map<Long, Int> = emptyMap()
     private var mFilterJob: Job? = null
+    private var mFetchPagesJob: Job? = null
     private val mPageProgressCache = ConcurrentHashMap<Long, Pair<Int, Int>>()
+    private val mPendingPageFetch = ConcurrentHashMap<Long, String>()
+    private val mAttemptedPageFetch = ConcurrentHashMap.newKeySet<Long>()
 
     override fun getNavCheckedItem(): Int = R.id.nav_downloads
 
@@ -502,6 +510,8 @@ class DownloadsScene :
         super.onDestroyView()
         mFilterJob?.cancel()
         mFilterJob = null
+        mFetchPagesJob?.cancel()
+        mFetchPagesJob = null
         if (null != mRecyclerView) {
             mRecyclerView!!.stopScroll()
             mRecyclerView = null
@@ -1004,19 +1014,39 @@ class DownloadsScene :
             return
         }
         holder.pages.visibility = View.GONE
+        val appContext = context?.applicationContext ?: return
         lifecycleScope.launchIO {
             val spiderInfo = SpiderDen.getGalleryDownloadDir(gid)
                 ?.findFile(SpiderQueen.SPIDER_INFO_FILENAME)
                 ?.let { readFromUniFile(it) }
                 ?: readFromCache(gid)
-            val totalPages = spiderInfo?.pages ?: info.pages.coerceAtLeast(0)
+            val pagesPrefs = appContext.getSharedPreferences(PREF_DOWNLOAD_PAGES, Context.MODE_PRIVATE)
+            val savedPages = pagesPrefs.getInt(gid.toString(), 0)
+            val totalPages = when {
+                spiderInfo != null && spiderInfo.pages > 0 -> spiderInfo.pages
+                info.pages > 0 -> info.pages
+                savedPages > 0 -> savedPages
+                else -> 0
+            }
+            if (totalPages > 0 && savedPages != totalPages) {
+                pagesPrefs.edit().putInt(gid.toString(), totalPages).apply()
+            }
             val startPage = spiderInfo?.startPage ?: 0
             val readPage = if (totalPages > 0 && startPage > 0) {
                 (startPage + 1).coerceAtMost(totalPages)
             } else {
                 0
             }
-            mPageProgressCache[gid] = readPage to totalPages
+            if (totalPages > 0) {
+                mPageProgressCache[gid] = readPage to totalPages
+            } else {
+                // Undownloaded gallery without local SpiderInfo: batch-fetch page count via gdata API
+                val token = info.token
+                if (!token.isNullOrEmpty() && mAttemptedPageFetch.add(gid)) {
+                    mPendingPageFetch[gid] = token
+                    scheduleFetchMissingPages(appContext)
+                }
+            }
             withUIContext {
                 if (isAdded && holder.pages.tag == gid && info.state != DownloadInfo.STATE_DOWNLOAD) {
                     if (totalPages > 0) {
@@ -1024,6 +1054,53 @@ class DownloadsScene :
                         holder.pages.visibility = View.VISIBLE
                     } else {
                         holder.pages.visibility = View.GONE
+                    }
+                }
+            }
+        }
+    }
+
+    @SuppressLint("NotifyDataSetChanged")
+    private fun scheduleFetchMissingPages(appContext: Context) {
+        if (mFetchPagesJob?.isActive == true) return
+        mFetchPagesJob = lifecycleScope.launchIO {
+            // Brief coalesce so visible items are fetched together in one gdata batch (up to 25)
+            kotlinx.coroutines.delay(120L)
+            val pagesPrefs = appContext.getSharedPreferences(PREF_DOWNLOAD_PAGES, Context.MODE_PRIVATE)
+            while (mPendingPageFetch.isNotEmpty()) {
+                val batch = ArrayList<BaseGalleryInfo>(25)
+                val iterator = mPendingPageFetch.entries.iterator()
+                while (iterator.hasNext() && batch.size < 25) {
+                    val (gid, token) = iterator.next()
+                    iterator.remove()
+                    batch.add(
+                        BaseGalleryInfo().apply {
+                            this.gid = gid
+                            this.token = token
+                        },
+                    )
+                }
+                if (batch.isEmpty()) break
+                val fetched = runSuspendCatching {
+                    EhEngine.fillGalleryListByApi(batch, EhUrl.referer)
+                }.isSuccess
+                if (fetched) {
+                    val editor = pagesPrefs.edit()
+                    var updated = false
+                    for (gi in batch) {
+                        if (gi.pages > 0) {
+                            editor.putInt(gi.gid.toString(), gi.pages)
+                            mPageProgressCache[gi.gid] = 0 to gi.pages
+                            updated = true
+                        }
+                    }
+                    editor.apply()
+                    if (updated) {
+                        withUIContext {
+                            if (isAdded) {
+                                mAdapter?.notifyDataSetChanged()
+                            }
+                        }
                     }
                 }
             }
@@ -1602,6 +1679,7 @@ class DownloadsScene :
         private const val TYPE_KEYWORD = 5
         private const val TYPE_HAS_UPDATE = 6
         private const val TYPE_DUPLICATE = 7
+        private const val PREF_DOWNLOAD_PAGES = "download_pages_cache"
 
         private fun getAuthor(title: String): String {
             val matcher = PATTERN_AUTHOR.find(title) ?: return ""

@@ -111,10 +111,14 @@ object DownloadUpdateChecker {
     /**
      * Check every gallery in [infos] concurrently. Results are saved incrementally, so a
      * cancelled check still keeps what has been found so far.
+     *
+     * If [onFoundUpdate] is provided, it is invoked immediately as each outdated gallery is
+     * discovered (concurrently with ongoing checks).
      */
     suspend fun check(
         context: Context,
         infos: List<GalleryInfo>,
+        onFoundUpdate: (suspend (oldGid: Long, latestGid: Long, latestToken: String) -> Unit)? = null,
         onProgress: suspend (checked: Int, total: Int, found: Int) -> Unit,
     ): Result {
         val set = ensureLoaded(context)
@@ -152,6 +156,7 @@ object DownloadUpdateChecker {
                                             synchronized(lock) { set.add(info.gid) }
                                             latestVersions[info.gid] = checkOutcome.latestGid to checkOutcome.latestToken
                                             found.incrementAndGet()
+                                            onFoundUpdate?.invoke(info.gid, checkOutcome.latestGid, checkOutcome.latestToken)
                                         }
 
                                         SingleOutcome.UpToDate -> {

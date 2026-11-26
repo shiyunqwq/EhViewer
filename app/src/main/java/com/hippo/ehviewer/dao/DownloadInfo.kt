@@ -66,6 +66,7 @@ class DownloadInfo() : BaseGalleryInfo() {
         rating = galleryInfo.rating
         simpleTags = galleryInfo.simpleTags
         simpleLanguage = galleryInfo.simpleLanguage
+        pages = galleryInfo.pages
     }
 
     companion object {
