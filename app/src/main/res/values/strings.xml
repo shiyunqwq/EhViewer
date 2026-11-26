@@ -367,6 +367,16 @@
     <!-- Download Action Bar -->
     <string name="download_filter">Filter</string>
     <string name="download_filter_title">Filter title</string>
+    <string name="download_filter_has_update">Has update</string>
+    <string name="download_filter_duplicate_title">Duplicate title</string>
+    <string name="download_update_last_result">Show last check result (%d)</string>
+    <string name="download_update_recheck">Check for updates again</string>
+    <string name="download_update_check_message">Check downloaded galleries in the current label for newer versions? This may take a while if there are many galleries.</string>
+    <string name="download_update_none">No updates found</string>
+    <string name="download_update_check_done">Found %1$d updates (%2$d failed)</string>
+    <string name="download_duplicate_searching">Finding duplicate or similar titles…</string>
+    <string name="download_duplicate_none">No duplicate titles found</string>
+    <string name="download_duplicate_found">Found %1$d galleries in %2$d groups</string>
     <string name="download_start_all">Start all</string>
     <string name="download_stop_all">Stop all</string>
     <string name="download_start_all_reversed">Start all (reversed)</string>

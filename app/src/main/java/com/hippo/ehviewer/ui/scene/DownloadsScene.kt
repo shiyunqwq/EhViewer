@@ -36,8 +36,10 @@ import androidx.appcompat.widget.Toolbar
 import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
 import androidx.core.util.size
-import android.widget.Switch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.core.view.GravityCompat
 import androidx.core.view.ViewCompat
@@ -68,6 +70,8 @@ import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.DownloadManager.DownloadInfoListener
 import com.hippo.ehviewer.download.DownloadService
 import com.hippo.ehviewer.download.DownloadService.Companion.clear
+import com.hippo.ehviewer.download.DownloadUpdateChecker
+import com.hippo.ehviewer.download.DuplicateTitleFinder
 import com.hippo.ehviewer.spider.DownloadInfoMagics.encodeMagicRequest
 import com.hippo.ehviewer.spider.SpiderDen
 import com.hippo.ehviewer.ui.GalleryActivity
@@ -77,6 +81,7 @@ import com.hippo.unifile.UniFile
 import com.hippo.util.launchIO
 import com.hippo.util.launchNonCancellable
 import com.hippo.util.launchUI
+import com.hippo.util.withUIContext
 import com.hippo.view.ViewTransition
 import com.hippo.widget.FabLayout
 import com.hippo.widget.FabLayout.OnClickFabListener
@@ -113,6 +118,9 @@ class DownloadsScene :
     private var mSort = Settings.defaultSortingMethod
     private var mType = -1
     private var mInitPosition = -1
+    private var mOutdatedGids: Set<Long> = emptySet()
+    private var mDuplicateGroups: Map<Long, Int> = emptyMap()
+    private var mFilterJob: Job? = null
 
     override fun getNavCheckedItem(): Int = R.id.nav_downloads
 
@@ -178,23 +186,12 @@ class DownloadsScene :
 
     @SuppressLint("NotifyDataSetChanged")
     private fun updateForLabel() {
-        var list: MutableList<DownloadInfo>?
-        if (mLabel == null) {
-            list = DownloadManager.allDownloadInfoList
-        } else if (mLabel == getString(R.string.default_download_label_name)) {
-            list = DownloadManager.defaultDownloadInfoList
-        } else {
-            list = DownloadManager.getLabelDownloadInfoList(mLabel)
-            if (list == null) {
-                mLabel = null
-                list = DownloadManager.allDownloadInfoList
-            }
-        }
+        val list = getCurrentLabelList()
 
         if (mType != -1) {
             mList = ArrayList()
             list.forEach {
-                if ((mKeyword != null && EhUtils.getSuitableTitle(it).contains(mKeyword!!, true)) || it.state == mType) {
+                if (matchFilter(it)) {
                     mList!!.add(it)
                 }
             }
@@ -224,10 +221,174 @@ class DownloadsScene :
             }
         }
 
+        if (mType == TYPE_DUPLICATE) {
+            // Put galleries of the same group next to each other,
+            // keeping the selected sort order inside and between groups
+            val sorted = mList!!
+            val firstPosition = HashMap<Int, Int>()
+            sorted.forEachIndexed { index, info ->
+                firstPosition.getOrPut(mDuplicateGroups[info.gid] ?: -1) { index }
+            }
+            sorted.sortBy { firstPosition[mDuplicateGroups[it.gid] ?: -1] ?: 0 }
+        }
+
         mAdapter?.notifyDataSetChanged()
 
         updateTitle()
         Settings.putRecentDownloadLabel(mLabel)
+    }
+
+    private fun getCurrentLabelList(): MutableList<DownloadInfo> {
+        if (mLabel == null) {
+            return DownloadManager.allDownloadInfoList
+        }
+        if (mLabel == getString(R.string.default_download_label_name)) {
+            return DownloadManager.defaultDownloadInfoList
+        }
+        val list = DownloadManager.getLabelDownloadInfoList(mLabel)
+        if (list == null) {
+            mLabel = null
+            return DownloadManager.allDownloadInfoList
+        }
+        return list
+    }
+
+    private fun matchFilter(info: DownloadInfo): Boolean = when (mType) {
+        TYPE_KEYWORD -> mKeyword?.let { EhUtils.getSuitableTitle(info).contains(it, true) } == true
+        TYPE_HAS_UPDATE -> info.gid in mOutdatedGids
+        TYPE_DUPLICATE -> info.gid in mDuplicateGroups
+        else -> info.state == mType
+    }
+
+    private fun applyFilterType(type: Int) {
+        mType = type
+        mKeyword = null
+        updateForLabel()
+        updateView()
+    }
+
+    private fun showHasUpdateFilterDialog() {
+        val context = context ?: return
+        if (mFilterJob?.isActive == true) return
+        if (DownloadUpdateChecker.hasResult(context)) {
+            val count = DownloadUpdateChecker.outdatedGids(context).count { DownloadManager.containDownloadInfo(it) }
+            AlertDialog.Builder(context)
+                .setTitle(R.string.download_filter_has_update)
+                .setItems(
+                    arrayOf(
+                        getString(R.string.download_update_last_result, count),
+                        getString(R.string.download_update_recheck),
+                    ),
+                ) { _: DialogInterface?, which: Int ->
+                    if (which == 0) {
+                        mOutdatedGids = DownloadUpdateChecker.outdatedGids(context)
+                        applyFilterType(TYPE_HAS_UPDATE)
+                    } else {
+                        startUpdateCheck()
+                    }
+                }
+                .show()
+        } else {
+            AlertDialog.Builder(context)
+                .setTitle(R.string.download_filter_has_update)
+                .setMessage(R.string.download_update_check_message)
+                .setPositiveButton(android.R.string.ok) { _: DialogInterface?, _: Int -> startUpdateCheck() }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        }
+    }
+
+    private fun startUpdateCheck() {
+        val context = context ?: return
+        if (mFilterJob?.isActive == true) return
+        val appContext = context.applicationContext
+        val targets = ArrayList<DownloadInfo>(getCurrentLabelList())
+        if (targets.isEmpty()) {
+            showTip(R.string.download_update_none, LENGTH_SHORT)
+            return
+        }
+        val targetGids = targets.mapTo(HashSet()) { it.gid }
+
+        @SuppressLint("InflateParams")
+        val dialogView = layoutInflater.inflate(R.layout.preference_dialog_check_update, null)
+        val progressText = dialogView.findViewById<TextView>(R.id.progress_text)
+        val dialog = AlertDialog.Builder(context)
+            .setTitle(R.string.download_filter_has_update)
+            .setView(dialogView)
+            .setCancelable(false)
+            .setNegativeButton(android.R.string.cancel) { _: DialogInterface?, _: Int -> mFilterJob?.cancel() }
+            .show()
+        mFilterJob = lifecycleScope.launchIO {
+            var failed = 0
+            try {
+                val result = DownloadUpdateChecker.check(appContext, targets) { checked, total, found ->
+                    withUIContext {
+                        progressText.text = appContext.getString(
+                            R.string.settings_download_check_update_progress,
+                            checked,
+                            total,
+                            found,
+                        )
+                    }
+                }
+                failed = result.failed
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) {
+                    runCatching {
+                        if (dialog.isShowing) dialog.dismiss()
+                    }
+                    if (isAdded) {
+                        mOutdatedGids = DownloadUpdateChecker.outdatedGids(appContext)
+                        val found = mOutdatedGids.count { it in targetGids }
+                        if (found == 0) {
+                            showTip(R.string.download_update_none, LENGTH_SHORT)
+                        } else {
+                            showTip(appContext.getString(R.string.download_update_check_done, found, failed), LENGTH_LONG)
+                        }
+                        applyFilterType(TYPE_HAS_UPDATE)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun startDuplicateTitleFilter() {
+        val context = context ?: return
+        if (mFilterJob?.isActive == true) return
+        val targets = ArrayList<DownloadInfo>(getCurrentLabelList())
+
+        @SuppressLint("InflateParams")
+        val dialogView = layoutInflater.inflate(R.layout.preference_dialog_check_update, null)
+        dialogView.findViewById<TextView>(R.id.progress_text).setText(R.string.download_duplicate_searching)
+        val dialog = AlertDialog.Builder(context)
+            .setView(dialogView)
+            .setCancelable(false)
+            .setNegativeButton(android.R.string.cancel) { _: DialogInterface?, _: Int -> mFilterJob?.cancel() }
+            .show()
+        mFilterJob = lifecycleScope.launch(Dispatchers.Default) {
+            try {
+                val result = DuplicateTitleFinder.find(targets)
+                withUIContext {
+                    if (!isAdded) return@withUIContext
+                    if (result.groupCount == 0) {
+                        showTip(R.string.download_duplicate_none, LENGTH_SHORT)
+                    } else {
+                        mDuplicateGroups = result.groupOf
+                        applyFilterType(TYPE_DUPLICATE)
+                        showTip(
+                            getString(R.string.download_duplicate_found, result.groupOf.size, result.groupCount),
+                            LENGTH_SHORT,
+                        )
+                    }
+                }
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) {
+                    runCatching {
+                        if (dialog.isShowing) dialog.dismiss()
+                    }
+                }
+            }
+        }
     }
 
     private fun updateTitle() {
@@ -325,6 +486,8 @@ class DownloadsScene :
 
     override fun onDestroyView() {
         super.onDestroyView()
+        mFilterJob?.cancel()
+        mFilterJob = null
         if (null != mRecyclerView) {
             mRecyclerView!!.stopScroll()
             mRecyclerView = null
@@ -359,13 +522,11 @@ class DownloadsScene :
                         mType + 1,
                     ) { dialog: DialogInterface, which: Int ->
                         dialog.dismiss()
-                        if (which == 6) {
-                            showFilterTitleDialog()
-                        } else {
-                            mType = which - 1
-                            mKeyword = null
-                            updateForLabel()
-                            updateView()
+                        when (which) {
+                            6 -> showFilterTitleDialog()
+                            7 -> showHasUpdateFilterDialog()
+                            8 -> startDuplicateTitleFilter()
+                            else -> applyFilterType(which - 1)
                         }
                     }
                     .show()
@@ -456,7 +617,7 @@ class DownloadsScene :
             } else {
                 builder.setError(null)
                 dialog.dismiss()
-                mType = 5
+                mType = TYPE_KEYWORD
                 mKeyword = text.lowercase()
                 updateForLabel()
                 updateView()
@@ -1375,6 +1536,9 @@ class DownloadsScene :
         private const val KEY_LABEL = "label"
         private const val LABEL_OFFSET = 2
         private const val PAYLOAD_STATE = 0
+        private const val TYPE_KEYWORD = 5
+        private const val TYPE_HAS_UPDATE = 6
+        private const val TYPE_DUPLICATE = 7
 
         private fun getAuthor(title: String): String {
             val matcher = PATTERN_AUTHOR.find(title) ?: return ""

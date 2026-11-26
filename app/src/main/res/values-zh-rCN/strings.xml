@@ -340,6 +340,16 @@
     <!-- Download Action Bar -->
     <string name="download_filter">筛选</string>
     <string name="download_filter_title">筛选标题</string>
+    <string name="download_filter_has_update">有更新</string>
+    <string name="download_filter_duplicate_title">重复标题</string>
+    <string name="download_update_last_result">查看上次检测结果（%d 个）</string>
+    <string name="download_update_recheck">重新检测更新</string>
+    <string name="download_update_check_message">将逐个检测当前标签下的画廊是否有新版本，画廊较多时可能需要一些时间，是否继续？</string>
+    <string name="download_update_none">未发现可更新的画廊</string>
+    <string name="download_update_check_done">检测完成：发现 %1$d 个可更新（%2$d 个失败）</string>
+    <string name="download_duplicate_searching">正在筛选重复或相似标题…</string>
+    <string name="download_duplicate_none">未发现重复标题的画廊</string>
+    <string name="download_duplicate_found">找到 %2$d 组共 %1$d 个重复或相似画廊</string>
     <string name="download_start_all">全部开始</string>
     <string name="download_stop_all">全部停止</string>
     <string name="download_start_all_reversed">全部开始（倒序）</string>

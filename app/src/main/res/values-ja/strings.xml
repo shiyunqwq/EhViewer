@@ -331,6 +331,16 @@
     <!-- Download Action Bar -->
     <string name="download_filter">フィルター</string>
     <string name="download_filter_title">フィルターのタイトル</string>
+    <string name="download_filter_has_update">更新あり</string>
+    <string name="download_filter_duplicate_title">重複タイトル</string>
+    <string name="download_update_last_result">前回のチェック結果を表示 (%d)</string>
+    <string name="download_update_recheck">更新を再チェック</string>
+    <string name="download_update_check_message">現在のラベル内のギャラリーに新しいバージョンがあるか順番に確認します。件数が多い場合は時間がかかることがあります。</string>
+    <string name="download_update_none">更新は見つかりませんでした</string>
+    <string name="download_update_check_done">%1$d 件の更新が見つかりました (%2$d 件失敗)</string>
+    <string name="download_duplicate_searching">重複または類似タイトルを検索中…</string>
+    <string name="download_duplicate_none">重複タイトルは見つかりませんでした</string>
+    <string name="download_duplicate_found">%2$d グループ、合計 %1$d 件の重複・類似ギャラリーが見つかりました</string>
     <string name="download_start_all">すべて開始</string>
     <string name="download_stop_all">すべて停止</string>
     <string name="download_start_all_reversed">すべて開始 (逆順)</string>

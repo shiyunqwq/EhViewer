@@ -143,6 +143,7 @@ class CheckUpdateDownloadPreference(
                                                 result.galleryDetail,
                                                 result.label,
                                                 result.time,
+                                                info.gid,
                                             )
                                         }
                                         updatedCount++

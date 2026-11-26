@@ -32,7 +32,6 @@ import com.hippo.ehviewer.spider.readFromUniFile
 import com.hippo.ehviewer.spider.saveToUniFile
 import com.hippo.util.isAtLeastS
 import com.hippo.util.runSuspendCatching
-import com.hippo.util.sendTo
 import com.hippo.util.withUIContext
 import com.hippo.yorozuya.FileUtils
 import kotlinx.coroutines.CancellationException
@@ -102,24 +101,10 @@ object GalleryUpgradeHelper {
                 val dirName = FileUtils.sanitizeFilename("${result.gid}-${EhUtils.getSuitableTitle(result)}")
                 val downloadDir = SpiderDen.perSafeDownloadDir(result.gid, dirName)
                     ?: return UpgradeResult.Failed
-                // 将旧版本的已下载文件移动到新目录（保留已下载的图片）
-                val oldDir = SpiderDen.getGalleryDownloadDir(oldGid)
-                if (oldDir != null && oldDir.exists()) {
-                    oldDir.listFiles()?.forEach { file ->
-                        val name = file.name ?: return@forEach
-                        if (file.isFile && name != SpiderQueen.SPIDER_INFO_FILENAME) {
-                            // 创建目标文件，复制内容后删除源文件（UniFile 没有 moveTo）
-                            val target = downloadDir.createFile(name) ?: return@forEach
-                            runCatching {
-                                file sendTo target
-                                file.delete()
-                            }.onFailure { it.printStackTrace() }
-                        }
-                    }
-                    // 删除旧目录的元数据（保持图片已移走）
-                    oldDir.delete()
-                }
-
+                // 注意：这里不再手动搬运旧图片。
+                // spiderInfo.upgradeFrom = oldGid 会让 SpiderQueen 在下载时按图片哈希
+                // 从旧目录复制相同的页面（只下载新增/变化的页面），全部完成后
+                // DownloadManager 会自动删除旧目录。手动按文件名搬运会导致页码错位。
                 createdDir = true
                 val spiderInfoFile = downloadDir.createFile(SpiderQueen.SPIDER_INFO_FILENAME)
                     ?: run {
@@ -133,6 +118,8 @@ object GalleryUpgradeHelper {
                     putExtra(DownloadService.KEY_LABEL, label)
                     putExtra(DownloadService.KEY_GALLERY_INFO, result)
                     putExtra(DownloadService.KEY_TIME, time)
+                    // 让 DownloadManager 立即用新版本替换列表中的旧版本
+                    putExtra(DownloadService.KEY_UPGRADE_FROM, oldGid)
                 }
                 try {
                     ContextCompat.startForegroundService(context, intent)

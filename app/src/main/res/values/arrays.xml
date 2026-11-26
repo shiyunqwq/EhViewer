@@ -261,6 +261,8 @@
         <item>@string/download_state_finish</item>
         <item>@string/download_state_failed</item>
         <item>@string/download_filter_title</item>
+        <item>@string/download_filter_has_update</item>
+        <item>@string/download_filter_duplicate_title</item>
     </string-array>
 
     <string-array name="download_sort">

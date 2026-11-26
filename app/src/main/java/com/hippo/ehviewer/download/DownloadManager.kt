@@ -225,7 +225,12 @@ object DownloadManager : OnSpiderListener {
         }
     }
 
-    fun startDownload(galleryInfo: GalleryInfo, label: String?, time: Long = -1L) {
+    /**
+     * @param upgradeFrom gid of the old version when this download is a gallery upgrade.
+     * The old download info is replaced immediately (its downloaded files are kept so that
+     * [SpiderQueen] can reuse them, and they are deleted once the new version is finished).
+     */
+    fun startDownload(galleryInfo: GalleryInfo, label: String?, time: Long = -1L, upgradeFrom: Long = -1L) {
         if (mCurrentTask != null && mCurrentTask!!.gid == galleryInfo.gid) {
             // It is current task
             return
@@ -265,6 +270,8 @@ object DownloadManager : OnSpiderListener {
                 Log.e(TAG, "Can't find download info list with label: $label")
                 return
             }
+            // Upgrade: replace the old version in place instead of keeping both
+            val replaced = upgradeFrom > 0L && upgradeFrom != galleryInfo.gid && detachUpgradedOldInfo(upgradeFrom)
             if (preserveTime) {
                 list.add(info)
                 list.sortByDateDescending()
@@ -283,7 +290,7 @@ object DownloadManager : OnSpiderListener {
             EhDB.putDownloadInfo(info)
 
             // Notify
-            if (preserveTime) {
+            if (preserveTime || replaced) {
                 for (l in mDownloadInfoListeners) {
                     l!!.onReload()
                 }
@@ -502,6 +509,24 @@ object DownloadManager : OnSpiderListener {
         for (l in mDownloadInfoListeners) {
             l!!.onUpdateAll()
         }
+    }
+
+    /**
+     * Remove the old version's download info from the list when an upgrade starts.
+     * The download dirname and files are intentionally kept: the new version's spider
+     * copies identical pages from them, and [removeUpgradedOldGallery] deletes them
+     * after the new version is finished.
+     *
+     * @return true if an old info was removed
+     */
+    private fun detachUpgradedOldInfo(oldGid: Long): Boolean {
+        stopDownloadInternal(oldGid)
+        val oldInfo = mAllInfoMap[oldGid] ?: return false
+        EhDB.removeDownloadInfo(oldInfo)
+        mAllInfoList.remove(oldInfo)
+        mAllInfoMap.remove(oldGid)
+        getInfoListForLabel(oldInfo.label)?.remove(oldInfo)
+        return true
     }
 
     private fun removeUpgradedOldGallery(oldGid: Long) {

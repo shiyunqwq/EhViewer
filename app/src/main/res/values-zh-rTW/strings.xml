@@ -338,6 +338,16 @@
     <!-- Download Action Bar -->
     <string name="download_filter">過濾</string>
     <string name="download_filter_title">過濾標題</string>
+    <string name="download_filter_has_update">有更新</string>
+    <string name="download_filter_duplicate_title">重複標題</string>
+    <string name="download_update_last_result">檢視上次檢測結果（%d 個）</string>
+    <string name="download_update_recheck">重新檢測更新</string>
+    <string name="download_update_check_message">將逐個檢測目前標籤下的圖庫是否有新版本，圖庫較多時可能需要一些時間，是否繼續？</string>
+    <string name="download_update_none">未發現可更新的圖庫</string>
+    <string name="download_update_check_done">檢測完成：發現 %1$d 個可更新（%2$d 個失敗）</string>
+    <string name="download_duplicate_searching">正在篩選重複或相似標題…</string>
+    <string name="download_duplicate_none">未發現重複標題的圖庫</string>
+    <string name="download_duplicate_found">找到 %2$d 組共 %1$d 個重複或相似圖庫</string>
     <string name="download_start_all">全部開始</string>
     <string name="download_stop_all">全部停止</string>
     <string name="download_start_all_reversed">全部開始（倒序）</string>
