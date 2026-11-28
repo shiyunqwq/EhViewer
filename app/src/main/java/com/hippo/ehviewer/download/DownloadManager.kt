@@ -1178,8 +1178,8 @@ object DownloadManager : OnSpiderListener {
                         info.finished = mFinished
                         info.downloaded = mDownloaded
                         info.total = mTotal
-                        info.legacy = mTotal - mFinished
-                        if (info.legacy == 0) {
+                        info.legacy = if (mTotal > 0) mTotal - mFinished else -1
+                        if (mTotal > 0 && info.legacy == 0) {
                             info.state = DownloadInfo.STATE_FINISH
                         } else {
                             info.state = DownloadInfo.STATE_FAILED

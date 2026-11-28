@@ -27,6 +27,7 @@ import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.EhRequestBuilder
 import com.hippo.ehviewer.client.EhUrl
+import com.hippo.ehviewer.client.EhUtils.isExHentai
 import com.hippo.ehviewer.client.EhUtils.isMPVAvailable
 import com.hippo.ehviewer.client.data.GalleryInfo
 import com.hippo.ehviewer.client.exception.QuotaExceededException
@@ -40,6 +41,7 @@ import com.hippo.util.launchIO
 import com.hippo.util.runSuspendCatching
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
@@ -79,14 +81,25 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
     private var mOldDownloadDir: UniFile? = null
     private var mOldHashMap: MutableMap<String, Int>? = null
     private var mReadReference = 0
+
+    @Volatile
     private var mDownloadReference = 0
     private val mImageUrls = hashMapOf<Long, String>()
+
+    @Volatile
+    private var prepareFailed = false
 
     @Volatile
     var completedUpgradeFrom: Long? = null
 
     fun addOnSpiderListener(listener: OnSpiderListener) {
-        synchronized(mSpiderListeners) { mSpiderListeners.add(listener) }
+        val alreadyFailed = synchronized(mSpiderListeners) {
+            mSpiderListeners.add(listener)
+            prepareFailed
+        }
+        if (alreadyFailed && mDownloadReference > 0) {
+            listener.onFinish(0, 0, -1)
+        }
     }
 
     fun removeOnSpiderListener(listener: OnSpiderListener) {
@@ -243,11 +256,26 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
         check(!(mReadReference < 0 || mDownloadReference < 0)) { "Mode reference < 0" }
     }
 
-    private val prepareJob = launchIO { doPrepare() }
+    private val prepareJob = launch(Dispatchers.IO, CoroutineStart.LAZY) { doPrepare() }
+
+    private fun notifyPrepareFailed() {
+        val listeners = synchronized(mSpiderListeners) {
+            prepareFailed = true
+            if (mDownloadReference > 0) mSpiderListeners.toList() else emptyList()
+        }
+        listeners.forEach {
+            it.onFinish(0, 0, -1)
+        }
+    }
 
     private suspend fun doPrepare() {
         mSpiderDen.downloadDir = SpiderDen.getGalleryDownloadDir(galleryInfo.gid)?.takeIf { it.isDirectory }
-        mSpiderInfo = readSpiderInfoFromLocal() ?: readSpiderInfoFromInternet() ?: return
+        val spiderInfo = readSpiderInfoFromLocal() ?: readSpiderInfoFromInternet()
+        if (spiderInfo == null || spiderInfo.pages <= 0) {
+            notifyPrepareFailed()
+            return
+        }
+        mSpiderInfo = spiderInfo
         mPageStateArray = IntArray(mSpiderInfo.pages)
         prepareUpgrade()
         notifyGetPages(mSpiderInfo.pages)
@@ -401,6 +429,25 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
     }
         ?: readFromCache(galleryInfo.gid)?.takeIf { it.gid == galleryInfo.gid && it.token == galleryInfo.token }
 
+    private fun isIpBanned(code: Int, body: String): Boolean {
+        if (code == 429) return true
+        if (body.contains("Your IP address has been temporarily banned", ignoreCase = true)) return true
+        if (body.isEmpty() && !isExHentai) return true
+        return false
+    }
+
+    private fun parseBanWaitMs(body: String): Long {
+        var seconds = 0L
+        PATTERN_BAN_DAYS.find(body)?.groupValues?.get(1)?.toLongOrNull()?.let { seconds += it * 86400L }
+        PATTERN_BAN_HOURS.find(body)?.groupValues?.get(1)?.toLongOrNull()?.let { seconds += it * 3600L }
+        PATTERN_BAN_MINUTES.find(body)?.groupValues?.get(1)?.toLongOrNull()?.let { seconds += it * 60L }
+        PATTERN_BAN_SECONDS.find(body)?.groupValues?.get(1)?.toLongOrNull()?.let { seconds += it }
+        if (seconds <= 0L) {
+            return DEFAULT_BAN_RETRY_DELAY_MS
+        }
+        return ((seconds + 5L) * 1000L).coerceIn(MIN_BAN_RETRY_DELAY_MS, MAX_BAN_RETRY_DELAY_MS)
+    }
+
     private suspend fun readSpiderInfoFromInternet(): SpiderInfo? {
         val url = EhUrl.getGalleryDetailUrl(
             galleryInfo.gid,
@@ -409,18 +456,38 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
             false,
             GET_FULL_HASH,
         )
-        val request = EhRequestBuilder(url, EhUrl.referer).build()
-        return runSuspendCatching {
-            plainTextOkHttpClient.newCall(request).executeAsync().use { response ->
-                val body = response.body.string()
-                val pages = GalleryDetailParser.parsePages(body)
-                val spiderInfo = SpiderInfo(galleryInfo.gid, galleryInfo.token, pages)
-                readPreviews(body, 0, spiderInfo)
-                spiderInfo
+        var banRetries = 0
+        while (true) {
+            val request = EhRequestBuilder(url, EhUrl.referer).build()
+            var banWaitMs: Long? = null
+            val result = runSuspendCatching {
+                plainTextOkHttpClient.newCall(request).executeAsync().use { response ->
+                    val body = response.body.string()
+                    if (isIpBanned(response.code, body)) {
+                        if (mDownloadReference > 0 && banRetries < MAX_BAN_RETRIES) {
+                            banWaitMs = parseBanWaitMs(body)
+                        }
+                        return@use null
+                    }
+                    val pages = GalleryDetailParser.parsePages(body)
+                    val spiderInfo = SpiderInfo(galleryInfo.gid, galleryInfo.token, pages)
+                    readPreviews(body, 0, spiderInfo)
+                    spiderInfo
+                }
+            }.onFailure {
+                it.printStackTrace()
+            }.getOrNull()
+            if (result != null) {
+                return result
             }
-        }.onFailure {
-            it.printStackTrace()
-        }.getOrNull()
+            val waitMs = banWaitMs ?: return null
+            banRetries++
+            Log.w(
+                WORKER_DEBUG_TAG,
+                "IP temporarily banned while preparing gallery ${galleryInfo.gid}, retrying in ${waitMs / 1000}s (attempt $banRetries/$MAX_BAN_RETRIES)",
+            )
+            delay(waitMs)
+        }
     }
 
     private suspend fun getPTokenFromMultiPageViewer(gid: Long, token: String, spiderInfo: SpiderInfo) {
@@ -902,6 +969,14 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
         private val ERROR_TIMEOUT = GetText.getString(R.string.error_timeout)
         private val DECODE_ERROR = GetText.getString(R.string.error_decoding_failed)
         private val URL_509_PATTERN = Regex("\\.org/.+/509s?\\.gif")
+        private val PATTERN_BAN_DAYS = Regex("(\\d+)\\s+days?", RegexOption.IGNORE_CASE)
+        private val PATTERN_BAN_HOURS = Regex("(\\d+)\\s+hours?", RegexOption.IGNORE_CASE)
+        private val PATTERN_BAN_MINUTES = Regex("(\\d+)\\s+minutes?", RegexOption.IGNORE_CASE)
+        private val PATTERN_BAN_SECONDS = Regex("(\\d+)\\s+seconds?", RegexOption.IGNORE_CASE)
+        private const val MIN_BAN_RETRY_DELAY_MS = 15_000L
+        private const val MAX_BAN_RETRY_DELAY_MS = 120_000L
+        private const val DEFAULT_BAN_RETRY_DELAY_MS = 60_000L
+        private const val MAX_BAN_RETRIES = 60
         private const val FORCE_RETRY = "Force retry"
         private const val PREEMPTED_BY_FOREGROUND = "Preempted by foreground request"
         private const val WORKER_DEBUG_TAG = "SpiderQueenWorker"
@@ -916,8 +991,15 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
 
         fun obtainSpiderQueen(galleryInfo: GalleryInfo, @Mode mode: Int): SpiderQueen {
             val gid = galleryInfo.gid
-            return (sQueenMap[gid] ?: SpiderQueen(galleryInfo).also { sQueenMap[gid] = it }).apply {
+            val existing = sQueenMap[gid]
+            val queen = if (existing != null && !existing.prepareFailed) {
+                existing
+            } else {
+                SpiderQueen(galleryInfo).also { sQueenMap[gid] = it }
+            }
+            return queen.apply {
                 setMode(mode)
+                prepareJob.start()
                 launchIO { if (awaitReady()) updateMode() }
             }
         }
@@ -927,7 +1009,9 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
                 clearMode(mode)
                 if (mReadReference == 0 && mDownloadReference == 0) {
                     stop()
-                    sQueenMap.remove(galleryInfo.gid)
+                    if (sQueenMap[galleryInfo.gid] === queen) {
+                        sQueenMap.remove(galleryInfo.gid)
+                    }
                 } else {
                     launchIO { if (awaitReady()) updateMode() }
                 }
